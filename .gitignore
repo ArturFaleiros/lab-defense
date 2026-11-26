@@ -5,3 +5,6 @@ dist
 .secrets
 *.tsbuildinfo
 api/*.js
+
+.vercel
+.env*
