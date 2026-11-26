@@ -4,7 +4,17 @@ import { ENEMIES, type EnemyDef, type PhaseAction } from '../data/enemies';
 import { MAPS, MAP_H, MAP_W, PATH_WIDTH, UNIT_RADIUS, type MapDef } from '../data/maps';
 import type { BlockedZone, StageDef, WaveDef } from '../data/stages';
 import { SYNERGIES, type SynergyId } from '../data/synergies';
-import { INDUCTIVE_UNITS, UNITS, type UnitDef, type UnitStats } from '../data/units';
+import {
+  INDUCTIVE_UNITS,
+  MAGNETIC_UNITS,
+  SEMICONDUCTOR_UNITS,
+  THERMAL_UNITS,
+  TIMER_UNITS,
+  TRANSISTOR_UNITS,
+  UNITS,
+  type UnitDef,
+  type UnitStats,
+} from '../data/units';
 import { isCapsuleMilestone, rollCapsule, type CapsuleRoll } from '../progress/capsules';
 import type { DamageType, Difficulty, EnemyId, LoadoutEntry, TargetPriority, UnitClass, UnitId } from '../types';
 import { PathGeo, rng } from './geometry';
@@ -31,6 +41,21 @@ const SELL_REFUND = 0.6;
 const INDUCTIVE_PROTECT_BONUS = 0.15;
 /** 1.2: redução do tempo de carregamento do capacitor alimentado por uma Fonte DC (era 0,25) */
 const POWERED_CHARGE_BONUS = 0.1;
+
+/* 1.2: MOSFET — perdas de comutação crescem com a frequência, então o próprio dispositivo
+   aquece e, no limite térmico, entra em derating (redução forçada de cadência). */
+const MOSFET_HEAT_BASE = 0.25;
+const MOSFET_HEAT_PER_STAGE = 0.12;
+const MOSFET_COOL = 1.1;
+const MOSFET_DERATE = 0.45;
+const MOSFET_DERATE_DUR = 2.5;
+
+/* 1.2: plasma — ionização (dano contínuo de k·n², tipo descarga) e tempestade suprema */
+const ION_TICK = 0.25;
+const ION_DECAY = 1.8;
+/** bônus de dano de descarga em alvos ionizados (o canal já está condutivo) */
+const ION_CONDUCT_BONUS = 0.2;
+const PLASMA_STORM_GAP = 0.45;
 const HEAT_TICK = 0.25;
 const HEAT_DECAY = 1.5;
 const CHAIN_JUMP = 110;
@@ -122,6 +147,19 @@ export interface UnitInst {
   convT: number;
   /** alvos secundários (feixes extras do indutor e do supercondutor) */
   extra: number[];
+  /* ---------- Patch 1.2 ---------- */
+  /** MOSFET: estágio de frequência de comutação e aquecimento próprio (perdas ∝ f) */
+  fswStage: number;
+  selfHeat: number;
+  /** MOSFET: em derating térmico até este instante */
+  deratedUntil: number;
+  /** IGBT / amp. op.: recuperação após a habilidade (sem atacar) */
+  recoverUntil: number;
+  /** transformador de potência: conexões ativas no último passo (para a interface) */
+  linked: number;
+  /** plasma: descargas restantes da tempestade e instante da próxima */
+  stormLeft: number;
+  stormAt: number;
 }
 
 export interface EnemyInst {
@@ -192,6 +230,17 @@ export interface EnemyInst {
   tC: number;
   /** efeito Meissner deste passo */
   meissner: number;
+  /* ---------- Patch 1.2 ---------- */
+  /**
+   * Plasma: estágios de ionização. Funcionam como o calor do resistor (dano contínuo de
+   * k·n²), mas o dano é de tipo DESCARGA e o canal ionizado também conduz melhor —
+   * inimigos ionizados recebem mais dano de descarga.
+   */
+  ion: number;
+  ionCoef: number;
+  ionT: number;
+  ionTick: number;
+  ionSrc: number;
 }
 
 export type FxKind =
@@ -340,8 +389,10 @@ const freshBuff = (): Buff => ({
 });
 
 /** Comportamentos que atacam diretamente (afetados por “sobrecarga” e sincronizados pelo 555). */
-const ATTACKERS = new Set(['bolt', 'pulse', 'amplifier', 'heat', 'chain', 'wave']);
-const DIRECT_OVERLOAD = new Set(['bolt', 'pulse', 'amplifier', 'heat', 'chain']);
+const ATTACKERS = new Set(['bolt', 'pulse', 'amplifier', 'heat', 'chain', 'wave', 'switching', 'hv', 'opamp', 'plasma']);
+const DIRECT_OVERLOAD = new Set(['bolt', 'pulse', 'amplifier', 'heat', 'chain', 'switching', 'hv', 'opamp', 'plasma']);
+/** 1.2: comportamentos ofensivos (qualquer um que cause dano) — usado pelos modificadores. */
+const OFFENSIVE = new Set([...ATTACKERS, 'beam', 'capacitor', 'super', 'zone', 'timer', 'crystal']);
 
 /** hash determinístico em [0, 1) */
 function hash01(a: number, b: number, c = 0): number {
@@ -550,12 +601,23 @@ export class GameEngine extends Store<number> implements Tickable {
     return m.period ? Math.floor((this.time - (m.offset ?? 0)) / m.period) : 0;
   }
 
+  /**
+   * 1.2 — §11 (Instabilidade de frequência): desvio aplicado ao período das unidades
+   * temporizadoras. Alterna entre +25% e −20% a cada janela; 1 = sem desvio.
+   */
+  timerDeviation(): number {
+    if (!this.modActive('instabilidade_frequencia')) return 1;
+    return this.modCycle('instabilidade_frequencia') % 2 === 0 ? 1.25 : 0.8;
+  }
+
   /** Multiplicador da geração de créditos (fontes e retificadores). */
   incomeMul(): number {
     if (this.time < this.incomeHaltUntil) return 0;
     let m = 1;
     if (this.modActive('queda_rendimento')) m *= 0.6;
     if (this.modActive('dreno_energetico')) m *= 0.55;
+    // 1.2 — §11: Subtensão (permanente)
+    if (this.modActive('subtensao')) m *= 0.65;
     return m;
   }
 
@@ -624,7 +686,7 @@ export class GameEngine extends Store<number> implements Tickable {
     }
     if (this.modActive('sobrecarga_sistemica')) {
       for (const u of this.units) {
-        if (!ATTACKERS.has(u.def.behavior) && u.def.behavior !== 'beam' && u.def.behavior !== 'capacitor' && u.def.behavior !== 'super') continue;
+        if (!OFFENSIVE.has(u.def.behavior)) continue;
         u.buff.pSpeed *= 1 / 1.5;
         add(u, 'sobrecarga_sistemica');
       }
@@ -636,6 +698,76 @@ export class GameEngine extends Store<number> implements Tickable {
         add(u, 'falha_isolamento');
       }
     }
+
+    /* ---------------- 1.2 — §11: modificadores novos ---------------- */
+
+    // Interferência conduzida: atrasa a comutação dos semicondutores (filtro corta metade)
+    if (this.modActive('emi_conduzida')) {
+      for (const u of this.units) {
+        if (!SEMICONDUCTOR_UNITS.includes(u.def.id)) continue;
+        u.buff.pSpeed *= 1 / (u.buff.filtered ? 1.15 : 1.3);
+        add(u, 'emi_conduzida');
+      }
+    }
+    // Saturação magnética: o núcleo para de converter corrente em campo útil
+    if (this.modActive('saturacao_magnetica')) {
+      for (const u of this.units) {
+        if (!MAGNETIC_UNITS.includes(u.def.id)) continue;
+        u.buff.pDmg *= 0.6;
+        add(u, 'saturacao_magnetica');
+      }
+    }
+    // Ruído elétrico: ~40% das unidades sorteadas perdem cadência (isolamento/diodo imunes)
+    if (this.modActive('ruido_eletrico')) {
+      const c = this.modCycle('ruido_eletrico');
+      for (const u of this.units) {
+        if (u.buff.protected || u.entry.trait === 'isolamento') continue;
+        if (hash01(u.uid, c, 11) >= 0.4) continue;
+        u.buff.pSpeed *= 1 / (u.buff.filtered ? 1.15 : 1.3);
+        add(u, 'ruido_eletrico');
+      }
+    }
+    // Falha de comutação: zera a amplificação e corta o dano das unidades de transistor
+    if (this.modActive('falha_comutacao')) {
+      for (const u of this.units) {
+        if (!TRANSISTOR_UNITS.includes(u.def.id)) continue;
+        u.buff.pDmg *= 0.65;
+        if (this.time >= u.abilityUntil) {
+          u.stacks = 0;
+          u.fswStage = 0;
+        }
+        add(u, 'falha_comutacao');
+      }
+    }
+    // Efeito Joule: o alvo dissipa melhor o calor, então o dano contínuo rende menos
+    if (this.modActive('efeito_joule')) {
+      for (const u of this.units) {
+        if (!THERMAL_UNITS.includes(u.def.id)) continue;
+        add(u, 'efeito_joule');
+      }
+    }
+    // Instabilidade de frequência: marca as temporizadoras (o desvio vai no período)
+    if (this.modActive('instabilidade_frequencia')) {
+      for (const u of this.units) {
+        if (!TIMER_UNITS.includes(u.def.id)) continue;
+        add(u, 'instabilidade_frequencia');
+      }
+    }
+    // Subtensão: marca as unidades de economia (o corte vai em `incomeMul`)
+    if (this.modActive('subtensao')) {
+      for (const u of this.units) {
+        if (u.def.behavior !== 'income' && u.def.behavior !== 'rectifier' && u.def.behavior !== 'grid') continue;
+        add(u, 'subtensao');
+      }
+    }
+  }
+
+  /**
+   * 1.2 — §11: multiplicador do dano contínuo térmico/ionizante (Efeito Joule).
+   * Aplicado uma única vez, no instante em que o dano contínuo é causado.
+   */
+  thermalMul(): number {
+    return this.modActive('efeito_joule') ? 0.6 : 1;
   }
 
   /* ------------------------------------------------------------------ */
@@ -731,6 +863,13 @@ export class GameEngine extends Store<number> implements Tickable {
       convAcc: 0,
       convT: 0,
       extra: [],
+      fswStage: 0,
+      selfHeat: 0,
+      deratedUntil: 0,
+      recoverUntil: 0,
+      linked: 0,
+      stormLeft: 0,
+      stormAt: 0,
     };
     this.units.push(u);
     this.stats.placed++;
@@ -867,6 +1006,48 @@ export class GameEngine extends Store<number> implements Tickable {
         this.addFx({ kind: 'text', x: u.x, y: u.y - 30, r: 0, dur: 1.2, color: u.def.color, text: `Quench: ${Math.round(e0)}` });
         u.ramp = 0;
         u.stunUntil = t + 5;
+        break;
+      }
+      /* ---------------- 1.2 ---------------- */
+      case 'maxSwitching':
+        // refrigeração ideal: frequência travada no máximo e aquecimento zerado
+        u.fswStage = u.stats.fsw;
+        u.selfHeat = 0;
+        u.deratedUntil = 0;
+        this.addFx({ kind: 'ring', x: u.x, y: u.y, r: this.rangeOf(u), dur: 0.6, color: u.def.color });
+        break;
+      case 'maxPower':
+        u.cd = 0;
+        this.addFx({ kind: 'ring', x: u.x, y: u.y, r: this.rangeOf(u), dur: 0.7, color: '#ffffff' });
+        break;
+      case 'gridBoost':
+        // o ciclo de distribuição é pago na hora
+        u.incomeT = u.stats.interval;
+        this.addFx({ kind: 'ring', x: u.x, y: u.y, r: u.stats.aura, dur: 0.8, color: u.def.color });
+        break;
+      case 'phaseLock':
+        // dispara o pulso imediatamente e trava a fase
+        u.timerT = this.crystalPeriod(u);
+        this.addFx({ kind: 'ring', x: u.x, y: u.y, r: u.stats.aura, dur: 0.8, color: '#ffffff' });
+        break;
+      case 'openLoop':
+        u.stacks = u.stats.gain;
+        u.cd = 0;
+        // ao terminar a malha aberta, 2 s de recuperação (slew rate)
+        u.recoverUntil = t + ab.duration + 2;
+        this.addFx({ kind: 'ring', x: u.x, y: u.y, r: u.stats.aura, dur: 0.7, color: u.def.color });
+        break;
+      case 'plasmaStorm': {
+        const range = this.rangeOf(u);
+        u.stormLeft = 3;
+        u.stormAt = t;
+        for (const e of this.enemies) {
+          if (!e.alive || (e.x - u.x) ** 2 + (e.y - u.y) ** 2 > (range + e.def.radius) ** 2) continue;
+          this.addIon(e, u.stats.ionMax, u.stats.ionMax, u.stats.ionCoef * this.dmgMul(u), u.uid);
+          this.slowEnemy(e, 0.4, 4);
+        }
+        this.addFx({ kind: 'quench', x: u.x, y: u.y, r: range, dur: 1.2, color: u.def.color });
+        this.addFx({ kind: 'text', x: u.x, y: u.y - 30, r: 0, dur: 1.2, color: u.def.color, text: 'Tempestade eletromagnética' });
         break;
       }
     }
@@ -1015,6 +1196,11 @@ export class GameEngine extends Store<number> implements Tickable {
       boostAmt: 0,
       tC: 0,
       meissner: 0,
+      ion: 0,
+      ionCoef: 0,
+      ionT: 0,
+      ionTick: 0,
+      ionSrc: -1,
     };
     this.moveTo(e, d);
     this.enemies.push(e);
@@ -1128,7 +1314,8 @@ export class GameEngine extends Store<number> implements Tickable {
         if (e.heatTick >= HEAT_TICK) {
           e.heatTick -= HEAT_TICK;
           const src = this.unit(e.heatSrc) ?? null;
-          this.hit(e, e.heatCoef * e.heat * e.heat * HEAT_TICK, 'termico', src, true);
+          // 1.2: o Efeito Joule reduz o dano contínuo (aplicado uma única vez, aqui)
+          this.hit(e, e.heatCoef * e.heat * e.heat * HEAT_TICK * this.thermalMul(), 'termico', src, true);
         }
         e.heatT += dt;
         if (e.heatT >= HEAT_DECAY) {
@@ -1137,6 +1324,23 @@ export class GameEngine extends Store<number> implements Tickable {
         }
         if (!e.alive) continue;
       }
+      // 1.2: ionização do plasma — dano contínuo de k·n² (tipo descarga), ignora blindagem
+      if (e.ion > 0) {
+        e.ionTick += dt;
+        if (e.ionTick >= ION_TICK) {
+          e.ionTick -= ION_TICK;
+          const src = this.unit(e.ionSrc) ?? null;
+          this.hit(e, e.ionCoef * e.ion * e.ion * ION_TICK * this.thermalMul(), 'descarga', src, true);
+        }
+        e.ionT += dt;
+        if (e.ionT >= ION_DECAY) {
+          e.ionT = 0;
+          e.ion = Math.max(0, e.ion - 1);
+        }
+        if (!e.alive) continue;
+        // gás ionizado é mais denso de atravessar: desacelera enquanto durar
+        e.zoneSlow = Math.max(e.zoneSlow, Math.min(0.3, 0.05 * e.ion));
+      }
 
       // Efeito Meissner (supercondutor): desacelera e anula acelerações
       e.meissner = 0;
@@ -1144,6 +1348,8 @@ export class GameEngine extends Store<number> implements Tickable {
         if ((s.x - e.x) ** 2 + (s.y - e.y) ** 2 <= s.stats.meissner * s.stats.meissner) e.meissner = Math.max(e.meissner, s.stats.meissnerSlow);
       }
       if (t < e.boostUntil && !e.meissner) factor *= 1 + e.boostAmt;
+      // 1.2 — §11: Sobretensão periódica acelera todos os inimigos durante a janela
+      if (!e.meissner && this.modActive('sobretensao_periodica')) factor *= 1.35;
       const resonant = this.inResonantZone(e);
       if (resonant && !e.meissner) factor *= 1.35;
       if (e.meissner && factor > 1) factor = 1;
@@ -1338,6 +1544,12 @@ export class GameEngine extends Store<number> implements Tickable {
       const boost = id === 'transformador' && t < src.abilityUntil ? 0.45 : 0;
       const timerHigh = src.def.behavior === 'timer' && src.high;
       if (src.def.behavior === 'timer' && !timerHigh) continue;
+      // 1.2: o cristal só concede cadência durante o nível alto do seu clock
+      if (src.def.behavior === 'crystal' && !src.high) continue;
+      // 1.2: o transformador de potência escala com as unidades conectadas; o amp. op.
+      // dobra a aura quando está saturado (clipping)
+      const gridBonus = src.def.behavior === 'grid' ? this.gridBonus(src) : 0;
+      const opampMul = src.def.behavior === 'opamp' && this.clipping(src) ? 2 : 1;
       for (const dst of this.units) {
         const self = dst === src;
         if ((dst.x - src.x) ** 2 + (dst.y - src.y) ** 2 > s.aura * s.aura) continue;
@@ -1366,11 +1578,24 @@ export class GameEngine extends Store<number> implements Tickable {
             dst.buff.timer = Math.max(dst.buff.timer, s.auraSpeed * mono);
             applied = true;
           }
+        } else if (src.def.behavior === 'crystal') {
+          // clock de referência: cadência para quem ataca, enquanto o nível está alto
+          if (ATTACKERS.has(dst.def.behavior) || dst.def.behavior === 'beam' || dst.def.behavior === 'capacitor') {
+            const lock = t < src.abilityUntil ? 2 : 1;
+            dst.buff.timer = Math.max(dst.buff.timer, s.auraSpeed * lock);
+            applied = true;
+          }
+          // sinergia de temporização: cristal + CI 555 se reforçam
+          if (dst.def.behavior === 'timer') {
+            dst.buff.speed += 0.15;
+            applied = true;
+          }
         } else if (dst.def.behavior !== 'income' && dst.def.behavior !== 'aura' && dst.def.behavior !== 'rectifier' && dst.def.behavior !== 'timer') {
           dst.buff.speed += s.auraSpeed;
-          dst.buff.dmg += s.auraDamage + boost;
+          // 1.2: grid soma o bônus por conexão; o amp. op. saturado dobra a amplificação
+          dst.buff.dmg += (s.auraDamage + boost + gridBonus) * opampMul;
           dst.buff.range += s.auraRange;
-          if (boost) dst.buff.boosted = true;
+          if (boost || gridBonus > 0) dst.buff.boosted = true;
           applied = true;
         }
         if (applied) dst.links.push(src.uid);
@@ -1439,6 +1664,25 @@ export class GameEngine extends Store<number> implements Tickable {
     return u.buff.syn.includes(s);
   }
 
+  /**
+   * 1.2 — §3.3: bônus por carga conectada do Transformador de Potência. Conta quantas
+   * unidades estão na área (até `linkMax`) e devolve `perLink` por conexão. Durante a
+   * habilidade, conta como se estivesse no máximo. O resultado é guardado em `linked` para
+   * a interface mostrar a evolução da malha.
+   */
+  gridBonus(src: UnitInst): number {
+    const r = src.stats.aura;
+    let n = 0;
+    for (const o of this.units) {
+      if (o === src || (o.x - src.x) ** 2 + (o.y - src.y) ** 2 > r * r) continue;
+      n++;
+    }
+    const capped = Math.min(src.stats.linkMax, n);
+    src.linked = capped;
+    const effective = this.time < src.abilityUntil ? src.stats.linkMax : capped;
+    return src.stats.perLink * effective;
+  }
+
   /** Fase do ciclo da característica Sobrecarga controlada: 'boost' | 'cool' | null. */
   overloadState(u: UnitInst): 'boost' | 'cool' | null {
     if (u.entry.trait !== 'sobrecarga') return null;
@@ -1501,8 +1745,302 @@ export class GameEngine extends Store<number> implements Tickable {
         return this.actChain(u, dt, sp);
       case 'super':
         return this.actSuper(u, dt, sp);
+      /* ---------------- 1.2 ---------------- */
+      case 'switching':
+        return this.actSwitching(u, dt, sp);
+      case 'hv':
+        return this.actHv(u, dt, sp);
+      case 'grid':
+        return this.actGrid(u, dt, sp);
+      case 'crystal':
+        return this.actCrystal(u, dt, sp);
+      case 'opamp':
+        return this.actOpamp(u, dt, sp);
+      case 'plasma':
+        return this.actPlasma(u, dt, sp);
       case 'aura':
         return;
+    }
+  }
+
+  /* ================================================================== */
+  /* 1.2: comportamentos novos                                           */
+  /* ================================================================== */
+
+  /**
+   * MOSFET — §3.1. A frequência de comutação sobe a cada golpe: o dano cresce (+fswStep por
+   * estágio) e o intervalo encurta na mesma proporção. Em troca, as PERDAS DE COMUTAÇÃO
+   * crescem com a frequência, então cada golpe aquece o próprio dispositivo; ao passar do
+   * limite térmico a unidade entra em derating (cadência reduzida) até esfriar.
+   */
+  private actSwitching(u: UnitInst, dt: number, sp: number): void {
+    const t = this.time;
+    const forced = t < u.abilityUntil;
+    if (forced) {
+      u.fswStage = u.stats.fsw;
+      u.selfHeat = 0;
+    } else {
+      // resfriamento contínuo e queda da frequência quando não há alvo
+      u.selfHeat = Math.max(0, u.selfHeat - dt * MOSFET_COOL);
+      if (t - u.lastTargetT > 1) u.fswStage = 0;
+    }
+    const derated = !forced && t < u.deratedUntil;
+    u.cd -= dt * sp * (derated ? 1 - MOSFET_DERATE : 1);
+    if (u.cd > 0) return;
+    const targets = this.pick(u, this.rangeOf(u), u.stats.targets);
+    if (!targets.length) {
+      u.cd = 0;
+      return;
+    }
+    const stage = u.fswStage;
+    const dmg = u.stats.damage * (1 + stage * u.stats.fswStep) * this.dmgMul(u);
+    for (const e of targets) {
+      this.hit(e, dmg, 'comutacao', u);
+      this.addFx({ kind: 'bolt', x: u.x, y: u.y, x2: e.x, y2: e.y, r: 0, dur: 0.1, color: stage >= u.stats.fsw ? '#ffffff' : u.def.color });
+      u.aimX = e.x;
+      u.aimY = e.y;
+    }
+    if (!forced) {
+      u.fswStage = Math.min(u.stats.fsw, stage + 1);
+      // perda de comutação ∝ f: o aquecimento por golpe cresce com o estágio
+      u.selfHeat += MOSFET_HEAT_BASE + u.fswStage * MOSFET_HEAT_PER_STAGE;
+      if (u.selfHeat >= u.stats.thermal) {
+        u.deratedUntil = t + MOSFET_DERATE_DUR;
+        u.fswStage = Math.floor(u.fswStage / 2);
+        u.selfHeat = u.stats.thermal * 0.5;
+        this.addFx({ kind: 'heat', x: u.x, y: u.y - 20, x2: u.x, y2: u.y, r: 0, dur: 0.5, color: '#ff7a59' });
+      }
+    }
+    u.lastTargetT = t;
+    u.lastFire = t;
+    // o intervalo encurta com a frequência (até metade no estágio máximo)
+    u.cd = u.stats.interval / (1 + stage * u.stats.fswStep * 0.5);
+    this.sfxSoft('zap');
+  }
+
+  /**
+   * IGBT — §3.2. Poucos disparos, muito pesados, em área, com bônus contra blindagem: o
+   * golpe ignora uma parcela fixa da armadura (`armorPierce`) e ganha `armorBonus` contra
+   * inimigos blindados ou chefes.
+   */
+  private actHv(u: UnitInst, dt: number, sp: number): void {
+    const t = this.time;
+    if (t < u.recoverUntil) return;
+    u.cd -= dt * sp;
+    if (u.cd > 0) return;
+    const [target] = this.pick(u, this.rangeOf(u), 1);
+    if (!target) {
+      u.cd = 0;
+      return;
+    }
+    const maxed = t < u.abilityUntil;
+    const base = u.stats.damage * this.dmgMul(u) * (maxed ? 2 : 1);
+    const r = u.stats.splash * (maxed ? 1.5 : 1);
+    const pierce = maxed ? Infinity : u.stats.armorPierce;
+    for (const e of this.enemies) {
+      if (!e.alive || (e.x - target.x) ** 2 + (e.y - target.y) ** 2 > (r + e.def.radius) ** 2) continue;
+      const heavy = e.def.boss || e.armor > 0;
+      this.hit(e, base * (heavy ? 1 + u.stats.armorBonus : 1), 'comutacao', u, false, pierce);
+    }
+    this.stunEnemy(target, u.stats.stun);
+    this.addFx({ kind: 'discharge', x: target.x, y: target.y, r, dur: 0.5, color: maxed ? '#ffffff' : u.def.color });
+    this.addFx({ kind: 'bolt', x: u.x, y: u.y, x2: target.x, y2: target.y, r: 0, dur: 0.2, color: u.def.color });
+    u.aimX = target.x;
+    u.aimY = target.y;
+    u.lastFire = t;
+    u.cd = u.stats.interval;
+    this.sfx('discharge');
+  }
+
+  /**
+   * Transformador de Potência — §3.3. Não ataca: o bônus da aura é calculado em
+   * `computeBuffs` (cresce com as unidades conectadas). Aqui só paga a distribuição de
+   * energia, dobrada quando há uma fonte ou um retificador na área.
+   */
+  private actGrid(u: UnitInst, dt: number, sp: number): void {
+    if (this.phase !== 'wave' || u.stats.income <= 0) return;
+    u.incomeT += dt * sp;
+    const boost = this.time < u.abilityUntil;
+    if (u.incomeT < u.stats.interval && !boost) return;
+    if (!boost && u.incomeT < u.stats.interval) return;
+    u.incomeT = 0;
+    const feeder = this.units.some(
+      (o) => o !== u && (o.def.behavior === 'income' || o.def.behavior === 'rectifier') && (o.x - u.x) ** 2 + (o.y - u.y) ** 2 <= u.stats.aura * u.stats.aura,
+    );
+    const amount = Math.round(u.stats.income * (feeder ? 2 : 1) * this.incomeMul());
+    if (amount <= 0) return;
+    this.gain(amount);
+    u.earned += amount;
+    this.stats.fonteIncome += amount;
+    u.lastFire = this.time;
+    this.addFx({ kind: 'text', x: u.x, y: u.y - 22, r: 0, dur: 1, color: '#ffc14d', text: `+${amount}` });
+    this.sfxSoft('coin');
+  }
+
+  /**
+   * Oscilador de Cristal — §3.4. Clock estável: na borda de subida de cada período, pulsa
+   * sobre os inimigos no alcance (dano + lentidão + interrupção) e sincroniza as unidades da
+   * aura, que disparam imediatamente. Durante o nível alto, elas ganham cadência.
+   */
+  private actCrystal(u: UnitInst, dt: number, sp: number): void {
+    const T = this.crystalPeriod(u);
+    u.timerT += dt * sp;
+    if (u.timerT >= T) {
+      u.timerT -= T;
+      u.cycle++;
+      const locked = this.time < u.abilityUntil;
+      const range = this.rangeOf(u);
+      const dmg = u.stats.damage * this.dmgMul(u);
+      let any = false;
+      for (const e of this.enemies) {
+        if (!e.alive || (e.x - u.x) ** 2 + (e.y - u.y) ** 2 > (range + e.def.radius * 0.5) ** 2) continue;
+        any = true;
+        this.hit(e, dmg, 'comutacao', u);
+        // interferência de clock: a lentidão substitui (não acumula)
+        this.slowEnemy(e, u.stats.slow, u.stats.slowDur);
+        if (locked) this.stunEnemy(e, u.stats.stun);
+      }
+      for (const o of this.units) {
+        if (o === u || (o.x - u.x) ** 2 + (o.y - u.y) ** 2 > u.stats.aura * u.stats.aura) continue;
+        if (ATTACKERS.has(o.def.behavior) || o.def.behavior === 'beam' || o.def.behavior === 'capacitor') o.cd = Math.min(o.cd, 0);
+      }
+      this.addFx({ kind: 'ring', x: u.x, y: u.y, r: range, dur: 0.45, color: locked ? '#ffffff' : u.def.color });
+      if (any) u.lastFire = this.time;
+      this.sfxSoft('zap');
+    }
+    u.high = u.timerT / T < u.stats.duty || this.time < u.abilityUntil;
+  }
+
+  /**
+   * Período efetivo do cristal. A Instabilidade de frequência (§11) desvia o período das
+   * temporizadoras; o cristal sofre apenas metade do desvio (estabilidade piezoelétrica) e
+   * o OCXO é imune.
+   */
+  crystalPeriod(u: UnitInst): number {
+    const dev = this.timerDeviation();
+    if (dev === 1) return u.stats.interval;
+    if (u.entry.tier >= 2) return u.stats.interval; // OCXO: forno, imune
+    return u.stats.interval * (1 + (dev - 1) * 0.5);
+  }
+
+  /**
+   * Amp. Operacional — §3.5. Ganho por estágios aplicado a TODOS os alvos do golpe; a
+   * realimentação mantém o ponto de operação (trocar de alvo não zera o ganho). Na
+   * saturação (clipping) o dano recebe o bônus fixo e o golpe atinge um alvo extra.
+   */
+  private actOpamp(u: UnitInst, dt: number, sp: number): void {
+    const t = this.time;
+    if (t < u.recoverUntil) return;
+    const open = t < u.abilityUntil;
+    if (open) u.stacks = u.stats.gain;
+    u.cd -= dt * sp;
+    if (u.cd > 0) return;
+    const sat = u.stacks >= u.stats.gain;
+    const want = u.stats.targets + (sat ? 1 : 0) + (open ? Math.ceil(u.stats.targets * 0.5) : 0);
+    const targets = this.pick(u, this.rangeOf(u), want);
+    if (!targets.length) {
+      u.cd = 0;
+      if (t - u.lastTargetT > 2 && !open) u.stacks = 0;
+      return;
+    }
+    const dmg = u.stats.damage * (1 + u.stacks * u.stats.gainStep) * (sat ? 1 + u.stats.satBonus : 1) * this.dmgMul(u);
+    for (const e of targets) {
+      this.hit(e, dmg, 'comutacao', u);
+      this.addFx({ kind: 'bolt', x: u.x, y: u.y, x2: e.x, y2: e.y, r: 0, dur: 0.14, color: sat ? '#ffffff' : u.def.color });
+    }
+    if (!open) u.stacks = Math.min(u.stats.gain, u.stacks + 1);
+    u.lastTargetT = t;
+    u.aimX = targets[0].x;
+    u.aimY = targets[0].y;
+    u.lastFire = t;
+    u.cd = u.stats.interval;
+    this.sfxSoft('zap');
+  }
+
+  /** Amp. op. saturado (clipping): ganho no máximo. */
+  clipping(u: UnitInst): boolean {
+    return u.def.behavior === 'opamp' && u.stacks >= u.stats.gain;
+  }
+
+  /**
+   * Plasma — §3.6. Descarga em área que salta entre inimigos e IONIZA cada atingido. A
+   * ionização acumula estágios e causa dano contínuo de k·n² (tipo descarga), além de
+   * desacelerar — o canal ionizado também conduz melhor, então aumenta o dano de descarga.
+   */
+  private actPlasma(u: UnitInst, dt: number, sp: number): void {
+    const t = this.time;
+    if (u.stormLeft > 0 && t >= u.stormAt) {
+      u.stormLeft--;
+      u.stormAt = t + PLASMA_STORM_GAP;
+      const [first] = this.pick(u, this.rangeOf(u), 1);
+      if (first) this.plasmaDischarge(u, first, 2.5, u.stats.chains * 2);
+      return;
+    }
+    u.cd -= dt * sp;
+    if (u.cd > 0) return;
+    const [target] = this.pick(u, this.rangeOf(u), 1);
+    if (!target) {
+      u.cd = 0;
+      return;
+    }
+    this.plasmaDischarge(u, target, 1, u.stats.chains);
+    u.cd = u.stats.interval;
+  }
+
+  /** Uma descarga de plasma: área no alvo, cadeia de saltos e ionização em cada atingido. */
+  private plasmaDischarge(u: UnitInst, target: EnemyInst, mul: number, jumps: number): void {
+    const dmg = u.stats.damage * mul * this.dmgMul(u);
+    const r = u.stats.splash;
+    const hitSet = new Set<number>();
+    let cur: EnemyInst | undefined = target;
+    let px = u.x;
+    let py = u.y;
+    let d = dmg;
+    for (let i = 0; i <= jumps && cur; i++) {
+      hitSet.add(cur.uid);
+      this.addFx({ kind: 'bolt', x: px, y: py, x2: cur.x, y2: cur.y, r: 0, dur: 0.22, color: u.def.color });
+      px = cur.x;
+      py = cur.y;
+      // cada salto deposita energia em área
+      const cx = px;
+      const cy = py;
+      for (const e of this.enemies) {
+        if (!e.alive || (e.x - cx) ** 2 + (e.y - cy) ** 2 > (r + e.def.radius) ** 2) continue;
+        const near = e.uid === cur.uid;
+        this.hit(e, near ? d : d * 0.5, 'descarga', u);
+        if (e.alive) {
+          this.addIon(e, u.stats.ion, u.stats.ionMax, u.stats.ionCoef * this.dmgMul(u), u.uid);
+          this.slowEnemy(e, u.stats.slow, u.stats.slowDur);
+        }
+      }
+      this.addFx({ kind: 'discharge', x: cx, y: cy, r, dur: 0.4, color: u.def.color });
+      d *= u.stats.chainDecay;
+      let best: EnemyInst | undefined;
+      let bd = CHAIN_JUMP * CHAIN_JUMP;
+      for (const e of this.enemies) {
+        if (!e.alive || hitSet.has(e.uid) || e.open) continue;
+        const dd = (e.x - px) ** 2 + (e.y - py) ** 2;
+        if (dd <= bd) {
+          bd = dd;
+          best = e;
+        }
+      }
+      cur = best;
+    }
+    u.aimX = target.x;
+    u.aimY = target.y;
+    u.lastFire = this.time;
+    this.sfx('discharge');
+  }
+
+  /** Acumula estágios de ionização (mesma mecânica do calor, mas de tipo descarga). */
+  private addIon(e: EnemyInst, amount: number, max: number, coef: number, src: number): void {
+    if (amount <= 0 || max <= 0) return;
+    if (e.ion < max) e.ion = Math.min(max, e.ion + amount);
+    e.ionT = 0;
+    if (coef >= e.ionCoef) {
+      e.ionCoef = coef;
+      e.ionSrc = src;
     }
   }
 
@@ -2042,9 +2580,10 @@ export class GameEngine extends Store<number> implements Tickable {
   /**
    * Aplica dano considerando resistências, fraquezas, intertravamento, saturação, proteção
    * alternada, circuito aberto, modificadores, blindagem e escudo.
-   * `pierce`: ignora a blindagem (calor contínuo do resistor).
+   * `pierce`: ignora a blindagem (calor contínuo do resistor e ionização do plasma).
+   * `armorPierce` (1.2): parcela fixa da blindagem ignorada pelo golpe (IGBT).
    */
-  hit(e: EnemyInst, amount: number, type: DamageType, u: UnitInst | null, pierce = false): void {
+  hit(e: EnemyInst, amount: number, type: DamageType, u: UnitInst | null, pierce = false, armorPierce = 0): void {
     if (!e.alive || amount <= 0) return;
     if (e.open && type !== 'magnetico') return; // circuito aberto: só a indução o atinge
     let m = e.def.resist[type] ?? 1;
@@ -2057,8 +2596,14 @@ export class GameEngine extends Store<number> implements Tickable {
       else if (this.immuneType(e) === type) m *= 0.15;
     }
     if (this.modifiers.includes('instabilidade_circuito')) m *= e.def.boss || e.def.behavior.elite ? 0.8 : 0.92;
+    // 1.2 — §11: resistências concedidas por modificadores (permanentes, aplicadas uma vez)
+    if (type === 'magnetico' && this.modifiers.includes('blindagem_faraday')) m *= 0.65;
+    if ((type === 'descarga' || type === 'grampeamento') && this.modifiers.includes('ruptura_dieletrica')) m *= 0.7;
+    // 1.2: o canal ionizado conduz melhor — descargas em alvos ionizados causam mais dano
+    if (type === 'descarga' && e.ion > 0) m *= 1 + ION_CONDUCT_BONUS;
     let dmg = amount * m;
-    if (!pierce) dmg = Math.max(dmg * 0.3, dmg - e.armor);
+    // 1.2: o IGBT ignora uma parcela fixa da blindagem (o piso de 30% continua valendo)
+    if (!pierce) dmg = Math.max(dmg * 0.3, dmg - Math.max(0, e.armor - armorPierce));
     // 1.2: redução progressiva do modo Impossível — aplicada uma única vez, aqui
     const dr = this.damageReduction();
     if (dr > 0) dmg *= 1 - dr;

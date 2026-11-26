@@ -21,7 +21,14 @@ export type UnitId =
   | 'oscilador'
   | 'ci555'
   | 'tesla'
-  | 'supercondutor';
+  | 'supercondutor'
+  // Patch 1.2
+  | 'mosfet'
+  | 'igbt'
+  | 'trafopot'
+  | 'cristal'
+  | 'ampop'
+  | 'plasma';
 
 export type EnemyId =
   | 'curto'

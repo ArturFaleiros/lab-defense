@@ -26,7 +26,8 @@ const bgCache = new Map<string, HTMLCanvasElement>();
 const IMMUNE_LETTER: Record<string, string> = { comutacao: 'C', descarga: 'D', magnetico: 'M', grampeamento: 'G', termico: 'T' };
 
 /** Comportamentos cujo círculo relevante é a aura (não o alcance de ataque). */
-const AURA_ONLY = new Set(['aura', 'income', 'rectifier']);
+// 1.2: 'grid' (Transformador de Potência) também só tem área de aura, não alcance de tiro
+const AURA_ONLY = new Set(['aura', 'income', 'rectifier', 'grid']);
 
 function pathStroke(ctx: CanvasRenderingContext2D, pts: Vec[]) {
   ctx.beginPath();
@@ -398,22 +399,15 @@ export class Renderer {
 
     for (const u of eng.units) {
       const b = u.def.behavior;
-      const charge =
-        b === 'beam' || b === 'super'
-          ? u.ramp
-          : b === 'capacitor'
-            ? u.stored > 0
-              ? 1
-              : u.ramp * u.ramp
-            : b === 'amplifier'
-              ? u.stats.gain > 0
-                ? u.stacks / u.stats.gain
-                : 0
-              : b === 'timer'
-                ? u.high
-                  ? 1
-                  : 0
-                : 0;
+      // “carga” exibida no sprite: o que cada comportamento acumula (1.2 inclui os novos)
+      let charge = 0;
+      if (b === 'beam' || b === 'super') charge = u.ramp;
+      else if (b === 'capacitor') charge = u.stored > 0 ? 1 : u.ramp * u.ramp;
+      else if (b === 'amplifier' || b === 'opamp') charge = u.stats.gain > 0 ? u.stacks / u.stats.gain : 0;
+      else if (b === 'timer' || b === 'crystal') charge = u.high ? 1 : 0;
+      else if (b === 'switching') charge = u.stats.fsw > 0 ? u.fswStage / u.stats.fsw : 0;
+      else if (b === 'grid') charge = u.stats.linkMax > 0 ? u.linked / u.stats.linkMax : 0;
+      else if (b === 'plasma') charge = u.stormLeft > 0 ? 1 : 0;
       drawUnit(ctx, u.def.id, u.x, u.y, {
         tier: u.entry.tier,
         level: u.level,

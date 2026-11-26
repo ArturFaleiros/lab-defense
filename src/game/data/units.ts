@@ -1,6 +1,7 @@
 import type { UnitId } from '../types';
 import { stats, type UnitDef } from './unitTypes';
 import { EXPANSION_UNITS } from './unitsExpansion';
+import { OVERDRIVE_UNITS } from './unitsOverdrive';
 
 export * from './unitTypes';
 
@@ -738,9 +739,9 @@ const BASE_UNITS: Record<'rele' | 'bobina' | 'fonte' | 'indutor' | 'diodo' | 'ca
   },
 };
 
-export const UNITS: Record<UnitId, UnitDef> = { ...BASE_UNITS, ...EXPANSION_UNITS };
+export const UNITS: Record<UnitId, UnitDef> = { ...BASE_UNITS, ...EXPANSION_UNITS, ...OVERDRIVE_UNITS };
 
-/** Ordem de exibição (as unidades do Patch 1.1 vêm depois das originais). */
+/** Ordem de exibição (1.1 depois das originais; 1.2 no fim). */
 export const UNIT_ORDER: UnitId[] = [
   'rele',
   'bobina',
@@ -757,7 +758,33 @@ export const UNIT_ORDER: UnitId[] = [
   'ci555',
   'tesla',
   'supercondutor',
+  // Patch 1.2
+  'mosfet',
+  'igbt',
+  'trafopot',
+  'cristal',
+  'ampop',
+  'plasma',
 ];
 
 /** Unidades com bobina (recebem bônus quando protegidas por diodo — referência ao flyback). */
-export const INDUCTIVE_UNITS: UnitId[] = ['rele', 'bobina', 'indutor', 'rl', 'oscilador', 'tesla'];
+export const INDUCTIVE_UNITS: UnitId[] = ['rele', 'bobina', 'indutor', 'rl', 'oscilador', 'tesla', 'trafopot', 'cristal'];
+
+/* ---------------------------------------------------------------------- */
+/* 1.2: categorias usadas pelos modificadores (§11) e pelas sinergias      */
+/* ---------------------------------------------------------------------- */
+
+/** Unidades cujo funcionamento depende de junções semicondutoras. */
+export const SEMICONDUCTOR_UNITS: UnitId[] = ['diodo', 'transistor', 'retificador', 'ci555', 'mosfet', 'igbt', 'ampop', 'cristal'];
+
+/** Unidades cujo dano vem de núcleo/campo magnético. */
+export const MAGNETIC_UNITS: UnitId[] = ['bobina', 'indutor', 'rl', 'oscilador', 'transformador', 'trafopot', 'supercondutor'];
+
+/** Unidades baseadas em transistores (sofrem a Falha de comutação). */
+export const TRANSISTOR_UNITS: UnitId[] = ['transistor', 'mosfet', 'igbt', 'ampop'];
+
+/** Unidades temporizadoras (sofrem a Instabilidade de frequência). */
+export const TIMER_UNITS: UnitId[] = ['ci555', 'oscilador', 'cristal'];
+
+/** Unidades cujo dano contínuo é térmico/ionizante (sofrem o Efeito Joule). */
+export const THERMAL_UNITS: UnitId[] = ['resistor', 'plasma'];

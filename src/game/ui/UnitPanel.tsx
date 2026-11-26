@@ -139,6 +139,74 @@ export function statRows(entry: LoadoutEntry): Row[] {
         ['Efeito Meissner', (s) => `raio ${fmt(s.meissner)} · −${pct(s.meissnerSlow)}`],
         ['Alcance', (s) => fmt(s.range)],
       ];
+    /* ---------------- 1.2 ---------------- */
+    case 'switching':
+      return [
+        ['Dano por golpe (f mínima)', (s) => fmt(s.damage, 1)],
+        ['Dano por golpe (f máxima)', (s) => fmt(s.damage * (1 + s.fsw * s.fswStep), 1)],
+        ['Intervalo (f mínima)', (s) => sec(s.interval)],
+        ['Intervalo (f máxima)', (s) => sec(s.interval / (1 + s.fsw * s.fswStep * 0.5))],
+        ['Estágios de frequência', (s) => String(s.fsw)],
+        ['Ganho por estágio', (s) => `+${pct(s.fswStep)}`],
+        ['Limite térmico', (s) => fmt(s.thermal, 1)],
+        ['Alcance', (s) => fmt(s.range)],
+      ];
+    case 'hv':
+      return [
+        ['Dano do disparo', (s) => fmt(s.damage, 1)],
+        ['Contra blindados e chefes', (s) => `${fmt(s.damage * (1 + s.armorBonus), 1)} (+${pct(s.armorBonus)})`],
+        ['Blindagem ignorada', (s) => fmt(s.armorPierce, 1)],
+        ['Raio do disparo', (s) => fmt(s.splash)],
+        ['Intervalo', (s) => sec(s.interval)],
+        ['Interrupção', (s) => sec(s.stun)],
+        ['Alcance', (s) => fmt(s.range)],
+      ];
+    case 'grid':
+      return [
+        ['Raio da malha', (s) => fmt(s.aura)],
+        ['Bônus de dano (base)', (s) => `+${pct(s.auraDamage)}`],
+        ['Bônus por conexão', (s) => `+${pct(s.perLink)}`],
+        ['Conexões máximas', (s) => String(s.linkMax)],
+        ['Bônus de dano (malha cheia)', (s) => `+${pct(s.auraDamage + s.perLink * s.linkMax)}`],
+        ['Bônus de cadência', (s) => `+${pct(s.auraSpeed)}`],
+        ['Bônus de alcance', (s) => `+${pct(s.auraRange)}`],
+        ['Créditos por ciclo', (s) => `${fmt(Math.round(s.income))} (×2 com fonte/retificador)`],
+        ['Intervalo do ciclo', (s) => sec(s.interval)],
+      ];
+    case 'crystal':
+      return [
+        ['Dano do pulso', (s) => fmt(s.damage, 1)],
+        ['Período T', (s) => sec(s.interval)],
+        ['Ciclo de trabalho D', (s) => pct(s.duty)],
+        ['Cadência no nível alto', (s) => `+${pct(s.auraSpeed)}`],
+        ['Lentidão aplicada', (s) => `${pct(s.slow)} por ${sec(s.slowDur)}`],
+        ['Interrupção (PLL)', (s) => sec(s.stun)],
+        ['Raio do pulso', (s) => fmt(s.range)],
+        ['Raio da aura', (s) => fmt(s.aura)],
+      ];
+    case 'opamp':
+      return [
+        ['Dano por golpe (sem ganho)', (s) => fmt(s.damage, 1)],
+        ['Intervalo', (s) => sec(s.interval)],
+        ['Estágios de ganho', (s) => String(s.gain)],
+        ['Ganho por estágio', (s) => `+${pct(s.gainStep)}`],
+        ['Dano na saturação (clipping)', (s) => fmt(s.damage * (1 + s.gain * s.gainStep) * (1 + s.satBonus), 1)],
+        ['Alvos', (s) => `${s.targets} (${s.targets + 1} saturado)`],
+        ['Aura de amplificação', (s) => `+${pct(s.auraDamage)} · raio ${fmt(s.aura)}`],
+        ['Alcance', (s) => fmt(s.range)],
+      ];
+    case 'plasma':
+      return [
+        ['Dano da descarga', (s) => fmt(s.damage, 1)],
+        ['Intervalo', (s) => sec(s.interval)],
+        ['Raio da descarga', (s) => fmt(s.splash)],
+        ['Saltos', (s) => String(s.chains)],
+        ['Mantido por salto', (s) => pct(s.chainDecay)],
+        ['Ionização por descarga', (s) => `+${s.ion} (até ${s.ionMax})`],
+        ['Dano contínuo no máximo (k·n²/s)', (s) => fmt(s.ionCoef * s.ionMax * s.ionMax, 1)],
+        ['Lentidão do gás ionizado', (s) => `${pct(s.slow)} por ${sec(s.slowDur)}`],
+        ['Alcance', (s) => fmt(s.range)],
+      ];
   }
 }
 

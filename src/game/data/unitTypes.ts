@@ -20,7 +20,20 @@ export type Behavior =
   | 'rectifier'
   | 'timer'
   | 'chain'
-  | 'super';
+  | 'super'
+  // Patch 1.2
+  /** MOSFET: cadência que sobe com a frequência de comutação e aquece */
+  | 'switching'
+  /** IGBT: disparos concentrados, com bônus contra blindagem */
+  | 'hv'
+  /** Transformador de potência: aura que cresce com as unidades conectadas */
+  | 'grid'
+  /** Oscilador de cristal: clock estável que sincroniza e interfere na velocidade */
+  | 'crystal'
+  /** Amp. operacional: ganho por estágios em vários alvos, com saturação (clipping) */
+  | 'opamp'
+  /** Plasma de alta frequência: descargas encadeadas com ionização e dano contínuo */
+  | 'plasma';
 
 export interface UnitStats {
   damage: number;
@@ -83,6 +96,22 @@ export interface UnitStats {
   satBonus: number;
   /** capacitor: multiplicador do intervalo entre descargas (1 = padrão; 0,9 = 10% mais rápido) */
   recoverMul: number;
+  /** MOSFET: estágios de frequência de comutação e ganho de dano por estágio */
+  fsw: number;
+  fswStep: number;
+  /** MOSFET: aquecimento máximo tolerado antes da redução de cadência (derating) */
+  thermal: number;
+  /** IGBT: dano adicional contra inimigos blindados ou chefes (0,6 = +60%) */
+  armorBonus: number;
+  /** IGBT: blindagem ignorada por golpe */
+  armorPierce: number;
+  /** Transformador de potência: bônus por unidade conectada e número máximo de conexões */
+  perLink: number;
+  linkMax: number;
+  /** Plasma: estágios de ionização por descarga, limite e dano contínuo por estágio² */
+  ion: number;
+  ionMax: number;
+  ionCoef: number;
 }
 
 export const ZERO_STATS: UnitStats = {
@@ -126,6 +155,16 @@ export const ZERO_STATS: UnitStats = {
   satBonus: 0,
   // 1.2: multiplicadores partem de 1 (neutro), não de 0
   recoverMul: 1,
+  fsw: 0,
+  fswStep: 0,
+  thermal: 0,
+  armorBonus: 0,
+  armorPierce: 0,
+  perLink: 0,
+  linkMax: 0,
+  ion: 0,
+  ionMax: 0,
+  ionCoef: 0,
 };
 
 export const stats = (p: Partial<UnitStats>): UnitStats => ({ ...ZERO_STATS, ...p });
@@ -159,7 +198,27 @@ export interface UnitTier {
   extraLevels?: UnitLevel[];
 }
 
-export type AbilityKind = 'discharge' | 'overvolt' | 'forceBias' | 'resonance' | 'monostable' | 'hvDischarge' | 'quench';
+export type AbilityKind =
+  | 'discharge'
+  | 'overvolt'
+  | 'forceBias'
+  | 'resonance'
+  | 'monostable'
+  | 'hvDischarge'
+  | 'quench'
+  // Patch 1.2
+  /** MOSFET: comutação máxima sem aquecimento */
+  | 'maxSwitching'
+  /** IGBT: potência máxima, ignorando blindagem */
+  | 'maxPower'
+  /** Transformador de potência: todas as conexões no máximo */
+  | 'gridBoost'
+  /** Oscilador de cristal: travamento de fase (phase lock) */
+  | 'phaseLock'
+  /** Amp. operacional: ganho de malha aberta */
+  | 'openLoop'
+  /** Plasma: tempestade eletromagnética (habilidade suprema) */
+  | 'plasmaStorm';
 
 export interface AbilityDef {
   kind: AbilityKind;

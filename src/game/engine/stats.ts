@@ -103,6 +103,27 @@ export function dpsEstimate(entry: LoadoutEntry, s: UnitStats): number {
       return s.damage;
     case 'timer':
       return s.interval > 0 ? s.damage / s.interval : 0;
+    /* ---------------- 1.2 ---------------- */
+    case 'switching': {
+      // regime de frequência máxima: dano e cadência no estágio mais alto
+      if (s.interval <= 0) return 0;
+      const mul = 1 + s.fsw * s.fswStep;
+      const interval = s.interval / (1 + s.fsw * s.fswStep * 0.5);
+      return (s.damage * mul * s.targets) / interval;
+    }
+    case 'hv':
+      // alvo único blindado (o caso para o qual a unidade existe)
+      return s.interval > 0 ? (s.damage * (1 + s.armorBonus)) / s.interval : 0;
+    case 'crystal':
+      return s.interval > 0 ? s.damage / s.interval : 0;
+    case 'opamp':
+      // saturado (clipping), com o alvo extra que a saturação concede
+      return s.interval > 0 ? (s.damage * (1 + s.gain * s.gainStep) * (1 + s.satBonus) * (s.targets + 1)) / s.interval : 0;
+    case 'plasma':
+      // descarga principal + ionização sustentada no estágio máximo
+      return (s.interval > 0 ? s.damage / s.interval : 0) + s.ionCoef * s.ionMax * s.ionMax;
+    case 'grid':
+      return 0;
     default:
       return 0;
   }

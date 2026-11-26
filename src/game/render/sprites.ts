@@ -480,6 +480,296 @@ const DRAW_EXP: Record<'resistor' | 'transistor' | 'retificador' | 'oscilador' |
   },
 };
 
+/* ---------------------------------------------------------------- */
+/* Patch 1.2: unidades novas                                         */
+/* ---------------------------------------------------------------- */
+
+const DRAW_OD: Record<'mosfet' | 'igbt' | 'trafopot' | 'cristal' | 'ampop' | 'plasma', (ctx: Ctx, look: UnitLook, color: string) => void> = {
+  mosfet(ctx, look, color) {
+    // símbolo do MOSFET canal N: porta isolada, canal e seta do substrato
+    ctx.strokeStyle = '#b9c7d8';
+    ctx.lineWidth = 1.6;
+    // terminal de porta + barra isolada
+    ctx.beginPath();
+    ctx.moveTo(-13, 0);
+    ctx.lineTo(-7, 0);
+    ctx.moveTo(-7, -7);
+    ctx.lineTo(-7, 7);
+    ctx.stroke();
+    // canal (três segmentos) e trilhos de dreno/fonte
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2;
+    for (let k = -1; k <= 1; k++) {
+      ctx.beginPath();
+      ctx.moveTo(-3.5, k * 5 - 1.6);
+      ctx.lineTo(-3.5, k * 5 + 1.6);
+      ctx.stroke();
+    }
+    ctx.lineWidth = 1.6;
+    ctx.beginPath();
+    ctx.moveTo(-3.5, -5);
+    ctx.lineTo(7, -5);
+    ctx.lineTo(7, -12);
+    ctx.moveTo(-3.5, 5);
+    ctx.lineTo(7, 5);
+    ctx.lineTo(7, 12);
+    ctx.moveTo(-3.5, 0);
+    ctx.lineTo(3, 0);
+    ctx.stroke();
+    // seta do substrato
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.moveTo(3, 0);
+    ctx.lineTo(0.5, -2);
+    ctx.lineTo(0.5, 2);
+    ctx.closePath();
+    ctx.fill();
+    // frequência de comutação: trem de pulsos que acelera com `charge`
+    const n = 3 + Math.round(look.charge * 4);
+    ctx.strokeStyle = color;
+    ctx.globalAlpha = 0.5 + 0.5 * look.fire;
+    ctx.lineWidth = 1.2;
+    ctx.beginPath();
+    for (let i = 0; i < n; i++) {
+      const x = -10 + (i * 20) / n;
+      const w = 20 / n / 2;
+      ctx.moveTo(x, -14);
+      ctx.lineTo(x, -17);
+      ctx.lineTo(x + w, -17);
+      ctx.lineTo(x + w, -14);
+    }
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+  },
+
+  igbt(ctx, look, color) {
+    // símbolo do IGBT: porta isolada (MOSFET) + saída bipolar com seta
+    ctx.strokeStyle = '#b9c7d8';
+    ctx.lineWidth = 1.6;
+    ctx.beginPath();
+    ctx.moveTo(-13, 0);
+    ctx.lineTo(-8, 0);
+    ctx.moveTo(-8, -6);
+    ctx.lineTo(-8, 6);
+    ctx.moveTo(-4.5, -7);
+    ctx.lineTo(-4.5, 7);
+    ctx.stroke();
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1.8;
+    ctx.beginPath();
+    ctx.moveTo(-4.5, -4.5);
+    ctx.lineTo(6, -10);
+    ctx.moveTo(-4.5, 4.5);
+    ctx.lineTo(6, 10);
+    ctx.stroke();
+    // seta do emissor
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.moveTo(6, 10);
+    ctx.lineTo(1.6, 8.6);
+    ctx.lineTo(3.4, 5.4);
+    ctx.closePath();
+    ctx.fill();
+    // barramento CC carregado: brilha ao disparar
+    ctx.save();
+    ctx.shadowColor = color;
+    ctx.shadowBlur = 12 * look.fire;
+    ctx.strokeStyle = look.fire > 0.3 ? '#ffffff' : '#7f8ca3';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(9, -13);
+    ctx.lineTo(9, 13);
+    ctx.moveTo(12.5, -9);
+    ctx.lineTo(12.5, 9);
+    ctx.stroke();
+    ctx.restore();
+  },
+
+  trafopot(ctx, look, color) {
+    // dois enrolamentos sobre núcleo laminado + barramento de distribuição
+    coil(ctx, -11, -8, 6, 16, 5);
+    coil(ctx, 5, -8, 6, 16, 5);
+    ctx.strokeStyle = '#8c9bb0';
+    ctx.lineWidth = 1.5;
+    for (let k = -1; k <= 1; k++) {
+      ctx.beginPath();
+      ctx.moveTo(-2 + k * 1.6, -10);
+      ctx.lineTo(-2 + k * 1.6, 10);
+      ctx.stroke();
+    }
+    // conexões: traços que pulsam para fora conforme a malha é usada
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1.3;
+    const links = 4;
+    for (let i = 0; i < links; i++) {
+      const a = (i / links) * Math.PI * 2 + look.t * 0.5;
+      const r0 = 17;
+      const r1 = 21 + 2 * Math.sin(look.t * 3 + i);
+      ctx.globalAlpha = 0.45 + 0.4 * look.fire;
+      ctx.beginPath();
+      ctx.moveTo(Math.cos(a) * r0, Math.sin(a) * r0);
+      ctx.lineTo(Math.cos(a) * r1, Math.sin(a) * r1);
+      ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+  },
+
+  cristal(ctx, look, color) {
+    // símbolo do cristal: retângulo do quartzo entre duas placas
+    ctx.strokeStyle = '#b9c7d8';
+    ctx.lineWidth = 1.6;
+    ctx.beginPath();
+    ctx.moveTo(-13, 0);
+    ctx.lineTo(-7, 0);
+    ctx.moveTo(7, 0);
+    ctx.lineTo(13, 0);
+    ctx.moveTo(-7, -7);
+    ctx.lineTo(-7, 7);
+    ctx.moveTo(7, -7);
+    ctx.lineTo(7, 7);
+    ctx.stroke();
+    ctx.save();
+    ctx.shadowColor = color;
+    ctx.shadowBlur = 8 + 6 * look.fire;
+    ctx.fillStyle = INK;
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1.8;
+    ctx.beginPath();
+    ctx.rect(-4.5, -8, 9, 16);
+    ctx.fill();
+    ctx.stroke();
+    ctx.restore();
+    // vibração piezoelétrica: linhas finas e estáveis
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1;
+    ctx.globalAlpha = 0.55 + 0.45 * Math.abs(Math.sin(look.t * 6));
+    for (let k = -1; k <= 1; k += 2) {
+      ctx.beginPath();
+      ctx.moveTo(k * 7.5, -12);
+      ctx.lineTo(k * 7.5, 12);
+      ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+    // marcação do nível alto do clock
+    if (look.charge > 0.5) {
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.arc(0, -13.5, 2, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  },
+
+  ampop(ctx, look, color) {
+    // triângulo do amp. op. com entradas + e −
+    ctx.strokeStyle = '#b9c7d8';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(-13, -5);
+    ctx.lineTo(-8, -5);
+    ctx.moveTo(-13, 5);
+    ctx.lineTo(-8, 5);
+    ctx.moveTo(9, 0);
+    ctx.lineTo(13, 0);
+    ctx.stroke();
+    ctx.save();
+    ctx.shadowColor = color;
+    ctx.shadowBlur = 10 * look.fire;
+    ctx.fillStyle = INK;
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(-8, -10);
+    ctx.lineTo(-8, 10);
+    ctx.lineTo(9, 0);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    ctx.restore();
+    // sinais das entradas
+    ctx.strokeStyle = '#e4ebf3';
+    ctx.lineWidth = 1.4;
+    ctx.beginPath();
+    ctx.moveTo(-6.5, -5);
+    ctx.lineTo(-3.5, -5); // −
+    ctx.moveTo(-6.5, 5);
+    ctx.lineTo(-3.5, 5); // +
+    ctx.moveTo(-5, 3.5);
+    ctx.lineTo(-5, 6.5);
+    ctx.stroke();
+    // saturação (clipping): a onda de saída vira quadrada
+    if (look.charge >= 0.999) {
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 1.3;
+      ctx.beginPath();
+      ctx.moveTo(-9, -15);
+      ctx.lineTo(-4, -15);
+      ctx.lineTo(-4, -19);
+      ctx.lineTo(4, -19);
+      ctx.lineTo(4, -15);
+      ctx.lineTo(9, -15);
+      ctx.stroke();
+    } else {
+      ctx.strokeStyle = color;
+      ctx.globalAlpha = 0.7;
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      for (let x = -9; x <= 9; x++) ctx.lineTo(x, -17 + 2.4 * Math.sin((x / 9) * Math.PI * 2 + look.t * 4));
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+    }
+  },
+
+  plasma(ctx, look, color) {
+    // tocha: bico cônico com jato ionizado girando
+    ctx.save();
+    ctx.strokeStyle = '#8c9bb0';
+    ctx.lineWidth = 1.8;
+    ctx.fillStyle = '#1b2430';
+    ctx.beginPath();
+    ctx.moveTo(-7, -11);
+    ctx.lineTo(7, -11);
+    ctx.lineTo(4, 2);
+    ctx.lineTo(-4, 2);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    // bobina de acoplamento indutivo
+    ctx.strokeStyle = COPPER;
+    ctx.lineWidth = 1.4;
+    for (let i = 0; i < 3; i++) {
+      ctx.beginPath();
+      ctx.ellipse(0, -8 + i * 4, 8.5, 2.2, 0, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    // jato de plasma
+    ctx.shadowColor = color;
+    ctx.shadowBlur = 14;
+    const grad = ctx.createLinearGradient(0, 2, 0, 18);
+    grad.addColorStop(0, '#ffffff');
+    grad.addColorStop(0.5, color);
+    grad.addColorStop(1, 'rgba(255,111,224,0)');
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.moveTo(-4, 2);
+    ctx.quadraticCurveTo(-2, 12, 0, 18);
+    ctx.quadraticCurveTo(2, 12, 4, 2);
+    ctx.closePath();
+    ctx.fill();
+    // arcos ionizados ao redor
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 1;
+    ctx.globalAlpha = 0.5 + 0.5 * look.fire;
+    for (let i = 0; i < 3; i++) {
+      const a = look.t * 2.5 + (i * Math.PI * 2) / 3;
+      ctx.beginPath();
+      ctx.arc(0, 4, 11, a, a + 0.9);
+      ctx.stroke();
+    }
+    ctx.restore();
+    ctx.globalAlpha = 1;
+  },
+};
+
 /** Marca de raridade (Lendário, Mítico e Secreto ganham um selo brilhante). */
 function rarityMark(ctx: Ctx, id: UnitId, t: number) {
   const r = RARITIES[UNITS[id].rarity];
@@ -500,7 +790,10 @@ export function drawUnit(ctx: Ctx, id: UnitId, x: number, y: number, look: UnitL
   ctx.translate(x, y);
   ctx.scale(scale, scale);
   base(ctx, color, look);
-  (DRAW[id as keyof typeof DRAW] ?? DRAW_EXP[id as keyof typeof DRAW_EXP])(ctx, look, color);
+  // 1.2: três tabelas (original, expansão 1.1 e Overdrive 1.2); a plataforma é desenhada
+  // mesmo que alguma unidade nova ainda não tenha sprite própria.
+  const draw = DRAW[id as keyof typeof DRAW] ?? DRAW_EXP[id as keyof typeof DRAW_EXP] ?? DRAW_OD[id as keyof typeof DRAW_OD];
+  draw?.(ctx, look, color);
   rarityMark(ctx, id, look.t);
   pips(ctx, look.level, color);
   if (look.stunned) {
