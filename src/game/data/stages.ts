@@ -94,6 +94,16 @@ const ENEMY_IDS: EnemyId[] = [
   'saturado',
   'ressonancia',
   'apagao',
+  // Patch 1.2
+  'dieletrico',
+  'ambulante',
+  'faraday',
+  'supercap',
+  'reverso',
+  'voltaico',
+  'saturacaoprofunda',
+  'parasita',
+  'singularidade',
 ];
 
 export function parseWave(src: string): WaveDef {

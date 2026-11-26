@@ -612,15 +612,22 @@ export function modifiersFor(stage: StageDef, diff: Difficulty): ModifierId[] {
 /* Geração das ondas por dificuldade                                        */
 /* ------------------------------------------------------------------------ */
 
+/**
+ * Escoltas de elite por capítulo. 1.2: as elites novas entram a partir dos capítulos
+ * intermediários, para que cada cenário tenha um desafio de contrajogo diferente.
+ */
 const CHAPTER_ELITES: Record<number, EnemyId[]> = {
-  0: ['franco', 'saturado', 'sobretensao'],
-  1: ['franco', 'sobrecarga'],
-  2: ['fuga', 'sobrecarga'],
-  3: ['sobretensao', 'emi'],
-  4: ['aberto', 'fuga'],
-  5: ['saturado', 'franco', 'emi'],
-  6: ['saturado', 'sobretensao', 'aberto'],
+  0: ['franco', 'saturado', 'sobretensao', 'dieletrico', 'parasita'],
+  1: ['franco', 'sobrecarga', 'ambulante'],
+  2: ['fuga', 'sobrecarga', 'ambulante'],
+  3: ['sobretensao', 'emi', 'reverso'],
+  4: ['aberto', 'fuga', 'supercap'],
+  5: ['saturado', 'franco', 'emi', 'faraday', 'voltaico'],
+  6: ['saturado', 'sobretensao', 'aberto', 'dieletrico', 'saturacaoprofunda', 'parasita'],
 };
+
+/** §13: chefe final exclusivo do modo Impossível. */
+export const IMPOSSIBLE_FINAL_BOSS: EnemyId = 'singularidade';
 
 export function elitesFor(stage: StageDef): EnemyId[] {
   return stage.elites ?? CHAPTER_ELITES[stage.chapter] ?? CHAPTER_ELITES[6];
@@ -672,6 +679,14 @@ export function buildWaves(stage: StageDef, diff: Difficulty): WaveDef[] {
     if (diff === 'impossivel' && prog >= 0.5 && elites.length > 1) {
       const enemy = elites[(j + 1) % elites.length];
       groups.push({ enemy, count: 1 + Math.floor(prog * 3), gap: 2.6, at: 12, path: null, hp: 1 });
+    }
+    // §13: a última onda do Impossível traz a Singularidade Eletromagnética. Ela SUBSTITUI
+    // o chefe próprio da fase (dois chefes de vida máxima na mesma onda tornariam a onda
+    // inalcançável) e entra depois das escoltas, para que a aniquilação aos 25% seja o
+    // clímax da fase.
+    if (diff === 'impossivel' && j === n - 1) {
+      groups = groups.filter((g) => !ENEMIES[g.enemy].boss);
+      groups.push({ enemy: IMPOSSIBLE_FINAL_BOSS, count: 1, gap: 1, at: 16, path: null, hp: 1 });
     }
     out.push({ groups });
   }

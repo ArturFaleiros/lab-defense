@@ -56,6 +56,14 @@ const ION_DECAY = 1.8;
 /** bônus de dano de descarga em alvos ionizados (o canal já está condutivo) */
 const ION_CONDUCT_BONUS = 0.2;
 const PLASMA_STORM_GAP = 0.45;
+
+/** 1.2: tipos de dano considerados “elétricos” pela ruptura dielétrica (§4.1). */
+const ELECTRIC_TYPES = new Set<DamageType>(['descarga', 'comutacao', 'grampeamento']);
+
+/* §13.1: recuperação do chefe depois da aniquilação (ele esgotou a energia armazenada).
+   É a janela em que o jogador reconstrói a defesa. */
+const ANNIHILATION_RECOVERY = 8;
+const ANNIHILATION_WINDOW = 14;
 const HEAT_TICK = 0.25;
 const HEAT_DECAY = 1.5;
 const CHAIN_JUMP = 110;
@@ -160,6 +168,11 @@ export interface UnitInst {
   /** plasma: descargas restantes da tempestade e instante da próxima */
   stormLeft: number;
   stormAt: number;
+  /** 1.2: bloqueada contra venda acidental (Unit Manager, §7.4) */
+  locked: boolean;
+  /** 1.2: melhoria automática ligada e prioridade de 1 (maior) a 6 (menor) — §7.5 */
+  autoUpgrade: boolean;
+  autoPriority: number;
 }
 
 export interface EnemyInst {
@@ -241,6 +254,22 @@ export interface EnemyInst {
   ionT: number;
   ionTick: number;
   ionSrc: number;
+  /** Dielétrico Rompido: dano elétrico acumulado e janela de ruptura */
+  diel: number;
+  dielUntil: number;
+  /** Supercapacitor Instável: carga acumulada (fração da vida máxima) */
+  charge: number;
+  /** Semicondutor Reverso: em condução direta até este instante */
+  forwardUntil: number;
+  /** Saturação Profunda: medidor de saturação e janela de vulnerabilidade total */
+  satFill: number;
+  satUntil: number;
+  /** Oscilador Parasita / Arco Voltaico: tempo do próprio ciclo de interferência */
+  tD: number;
+  jamUntil: number;
+  /** §13: estado da aniquilação (0 = não começou, 1 = carregando, 2 = executada) */
+  annih: number;
+  annihAt: number;
 }
 
 export type FxKind =
@@ -320,6 +349,12 @@ export interface MatchStats {
   /* 1.1 */
   rectified: number;
   capsules: CapsuleRoll[];
+  /* 1.2 */
+  /** unidades destruídas pela aniquilação do chefe final (§13.1) */
+  annihilated: number;
+  unitsLostToBoss: number;
+  /** melhorias executadas pelo Auto Upgrade (§7.5) */
+  autoUpgrades: number;
 }
 
 export interface MatchConfig {
@@ -487,6 +522,9 @@ export class GameEngine extends Store<number> implements Tickable {
       abilities: 0,
       rectified: 0,
       capsules: [],
+      annihilated: 0,
+      unitsLostToBoss: 0,
+      autoUpgrades: 0,
     };
     this.snap = 0;
   }
@@ -870,6 +908,9 @@ export class GameEngine extends Store<number> implements Tickable {
       linked: 0,
       stormLeft: 0,
       stormAt: 0,
+      locked: false,
+      autoUpgrade: false,
+      autoPriority: 3,
     };
     this.units.push(u);
     this.stats.placed++;
@@ -1201,6 +1242,16 @@ export class GameEngine extends Store<number> implements Tickable {
       ionT: 0,
       ionTick: 0,
       ionSrc: -1,
+      diel: 0,
+      dielUntil: 0,
+      charge: 0,
+      forwardUntil: 0,
+      satFill: 0,
+      satUntil: 0,
+      tD: 0,
+      jamUntil: 0,
+      annih: 0,
+      annihAt: 0,
     };
     this.moveTo(e, d);
     this.enemies.push(e);
@@ -1291,6 +1342,38 @@ export class GameEngine extends Store<number> implements Tickable {
           this.sfx('emp');
         }
       }
+      /* ---------------- 1.2 — §4: mecânicas dos inimigos novos ---------------- */
+
+      // Supercapacitor Instável: acumula carga (vira escudo) ao longo do percurso
+      if (b.accumulate && e.charge < b.accumulate.max) {
+        e.charge = Math.min(b.accumulate.max, e.charge + b.accumulate.rate * dt);
+        e.shield = Math.max(e.shield, e.charge * e.maxHp);
+      }
+      // Arco Voltaico / Singularidade: descargas de contato desativam unidades próximas
+      if (b.contact) {
+        e.tD += dt;
+        if (e.tD >= b.contact.every) {
+          e.tD = 0;
+          this.emp(e.x, e.y, b.contact.radius, b.contact.stun, b.contact.stun * 0.4, e.def.color);
+          this.criticalHeat(e.x, e.y, e.def.name);
+        }
+      }
+      // Oscilador Parasita: interferência periódica na cadência (a contínua vai em computeBuffs)
+      if (b.jam?.every) {
+        e.tD += dt;
+        if (e.tD >= b.jam.every) {
+          e.tD = 0;
+          e.jamUntil = t + (b.jam.dur ?? 2);
+          this.addFx({ kind: 'wave', x: e.x, y: e.y, r: b.jam.radius, dur: 0.7, color: e.def.color });
+          this.sfxSoft('emp');
+        }
+      }
+      // Saturação Profunda: o medidor escoa devagar quando não está sendo preenchido
+      if (b.satMeter && t >= e.satUntil && e.satFill > 0) e.satFill = Math.max(0, e.satFill - b.satMeter.need * 0.04 * dt);
+
+      // §13: aniquilação eletromagnética
+      if (b.annihilate) this.annihilation(e, b.annihilate, dt);
+
       if (e.canOpen) {
         const oc = b.openCycle ?? { every: 3.2, open: 1.4 };
         e.openT += dt;
@@ -1357,6 +1440,10 @@ export class GameEngine extends Store<number> implements Tickable {
       // Movimento
       const immune = !!b.controlImmune;
       let speed = e.speed * factor;
+      // §13.1: durante o carregamento da aniquilação o chefe fica parado
+      if (e.annih === 1) speed = 0;
+      // §4: Saturação Profunda — o magnético que não fere, desacelera
+      if (b.satMeter && e.satFill > 0 && t >= e.satUntil) speed *= 1 - Math.min(0.45, (e.satFill / b.satMeter.need) * 0.45);
       if (!immune) {
         if (t < e.stunUntil) speed = 0;
         else {
@@ -1389,6 +1476,81 @@ export class GameEngine extends Store<number> implements Tickable {
         e.pendAt = t;
       }
     }
+  }
+
+  /**
+   * §13.1 — Aniquilação eletromagnética do chefe final do Impossível.
+   *
+   * Sequência: detecta os 25% da vida máxima → interrompe a movimentação → carrega por
+   * `charge` s com efeitos de concentração de energia e aviso global → executa a explosão →
+   * remove TODAS as unidades posicionadas → retoma o comportamento normal.
+   *
+   * Acontece uma única vez por chefe (`annih` vai de 0 a 2 e não volta). Nenhuma unidade
+   * sobrevive por imunidade ou proteção convencional: a remoção é centralizada em
+   * `annihilateUnits`, que também zera as referências que apontavam para elas.
+   */
+  private annihilation(e: EnemyInst, cfg: { at: number; charge: number }, dt: number): void {
+    void dt;
+    const t = this.time;
+    if (e.annih === 0 && e.hp / e.maxHp <= cfg.at) {
+      e.annih = 1;
+      e.annihAt = t + cfg.charge;
+      this.addFx({ kind: 'quench', x: e.x, y: e.y, r: 240, dur: cfg.charge, color: e.def.color });
+      this.addFx({ kind: 'text', x: e.x, y: e.y - e.def.radius - 26, r: 0, dur: cfg.charge, color: '#ffffff', text: 'CARREGANDO…' });
+      this.toast(`${e.def.name}: descarga eletromagnética iminente — TODAS as unidades serão destruídas!`, 'boss');
+      this.sfx('boss');
+      return;
+    }
+    if (e.annih === 1) {
+      // concentração de energia: anéis convergindo durante o carregamento
+      if (Math.floor(t * 6) !== Math.floor((t - STEP) * 6)) {
+        const k = Math.max(0, (e.annihAt - t) / cfg.charge);
+        this.addFx({ kind: 'ring', x: e.x, y: e.y, r: 60 + 220 * k, dur: 0.35, color: e.def.color });
+      }
+      if (t >= e.annihAt) {
+        e.annih = 2;
+        this.annihilateUnits(e);
+      }
+    }
+  }
+
+  /**
+   * Remoção centralizada e segura de TODAS as unidades posicionadas (§13.1).
+   * Nenhum crédito é devolvido: é uma falha catastrófica, não uma venda. Depois da remoção
+   * não sobra nenhuma referência pendente (auras, retificadores, alvos e habilidades são
+   * recalculados do zero no próximo passo, porque dependem apenas de `this.units`).
+   */
+  private annihilateUnits(e: EnemyInst): void {
+    const lost = this.units.length;
+    this.addFx({ kind: 'emp', x: e.x, y: e.y, r: 1400, dur: 1.1, color: '#ffffff' });
+    for (const u of this.units) {
+      this.addFx({ kind: 'death', x: u.x, y: u.y, r: 34, dur: 0.6, color: u.def.color });
+    }
+    // a lista é substituída de uma vez: nada de remoção parcial durante a iteração
+    this.units = [];
+    this.stats.annihilated += lost;
+    this.stats.unitsLostToBoss = Math.max(this.stats.unitsLostToBoss, lost);
+
+    /*
+     * Descarga total = energia esgotada. O chefe gastou de uma vez tudo o que havia nos
+     * barramentos e capacitores, então fica em recuperação: paralisado por um instante e
+     * vulnerável por uma janela, antes de retomar o comportamento normal (§13.1, passo 9).
+     *
+     * Essa janela é o que torna a mecânica justa em vez de uma derrota garantida: é o tempo
+     * de reconstruir a defesa com os créditos guardados. Sem ela, nenhuma composição
+     * verificada conseguia fechar os 25% restantes — ver o relatório do patch.
+     */
+    e.stunUntil = Math.max(e.stunUntil, this.time + ANNIHILATION_RECOVERY);
+    e.vulnUntil = Math.max(e.vulnUntil, this.time + ANNIHILATION_WINDOW);
+    e.shield = 0;
+
+    this.sfx('emp');
+    this.sfx('lose');
+    if (lost > 0) {
+      this.toast(`Aniquilação eletromagnética: ${lost} unidade(s) destruída(s)!`, 'boss');
+      this.toast(`O chefe esgotou a energia: ${ANNIHILATION_RECOVERY} s paralisado e vulnerável. Reconstrua AGORA.`, 'ok');
+    }
+    this.bump();
   }
 
   private phaseActions(e: EnemyInst, actions: PhaseAction[]): void {
@@ -1634,6 +1796,19 @@ export class GameEngine extends Store<number> implements Tickable {
         const r = b.brownout.radius;
         for (const u of this.units) {
           if ((u.x - e.x) ** 2 + (u.y - e.y) ** 2 <= r * r) u.buff.brownout = Math.max(u.buff.brownout, u.buff.protected ? b.brownout.amount / 2 : b.brownout.amount);
+        }
+      }
+      // 1.2 — §4.2/§4.8: interferência na cadência (contínua ou periódica, tratada igual aqui)
+      if (b.jam) {
+        const active = b.jam.every ? t < e.jamUntil : true;
+        if (active) {
+          const r = b.jam.radius;
+          for (const u of this.units) {
+            if (u.buff.protected || u.entry.trait === 'isolamento') continue;
+            if ((u.x - e.x) ** 2 + (u.y - e.y) ** 2 > r * r) continue;
+            const amount = u.buff.filtered ? b.jam.amount / 2 : b.jam.amount;
+            u.buff.noise = Math.max(u.buff.noise, amount);
+          }
         }
       }
     }
@@ -2046,8 +2221,10 @@ export class GameEngine extends Store<number> implements Tickable {
 
   private stunEnemy(e: EnemyInst, stun: number): void {
     if (stun <= 0 || e.def.behavior.controlImmune) return;
-    // chefes sofrem metade da interrupção; 1.2: resistência progressiva (uma única vez)
-    const st = (e.def.boss ? stun * 0.5 : stun) * (1 - this.controlResist());
+    // chefes sofrem metade da interrupção; 1.2: resistência própria do inimigo (Faraday,
+    // Oscilador Parasita) e resistência progressiva do Impossível — cada uma uma única vez
+    const own = 1 - (e.def.behavior.controlResist ?? 0);
+    const st = (e.def.boss ? stun * 0.5 : stun) * own * (1 - this.controlResist());
     if (st <= 0) return;
     e.stunUntil = Math.max(e.stunUntil, this.time + st);
     e.vulnUntil = Math.max(e.vulnUntil, this.time + st + 0.6);
@@ -2569,8 +2746,9 @@ export class GameEngine extends Store<number> implements Tickable {
 
   private slowEnemy(e: EnemyInst, amount: number, dur: number): void {
     if (amount <= 0 || e.def.behavior.controlImmune) return;
-    // 1.2: resistência progressiva aplicada uma única vez, ao criar o efeito
-    const a = (e.def.boss ? amount * 0.6 : amount) * (1 - this.controlResist());
+    // 1.2: resistência própria do inimigo + resistência progressiva, uma única vez cada
+    const own = 1 - (e.def.behavior.controlResist ?? 0);
+    const a = (e.def.boss ? amount * 0.6 : amount) * own * (1 - this.controlResist());
     if (a <= 0) return;
     if (this.time < e.slowUntil && e.slowAmt > a) return;
     e.slowAmt = a;
@@ -2594,6 +2772,68 @@ export class GameEngine extends Store<number> implements Tickable {
     if (e.def.behavior.cycleImmune) {
       if (type === 'grampeamento') e.clampUntil = this.time + 2;
       else if (this.immuneType(e) === type) m *= 0.15;
+    }
+
+    /* ---------------- 1.2 — §4: interações próprias dos inimigos novos ---------------- */
+    const bh = e.def.behavior;
+    const now = this.time;
+
+    // Dielétrico Rompido: durante a ruptura perde as resistências e sofre dano extra
+    if (bh.dielectric) {
+      if (now < e.dielUntil) m = (m / (e.def.resist[type] ?? 1)) * 1.25;
+      else if (ELECTRIC_TYPES.has(type)) {
+        e.diel += amount * m;
+        if (e.diel >= bh.dielectric.threshold) {
+          e.diel = 0;
+          e.dielUntil = now + bh.dielectric.dur;
+          this.addFx({ kind: 'spark', x: e.x, y: e.y - 14, x2: e.x, y2: e.y + 14, r: 18, dur: 0.5, color: '#ffffff' });
+          this.addFx({ kind: 'text', x: e.x, y: e.y - e.def.radius - 8, r: 0, dur: 1, color: '#6fd4ff', text: 'ruptura!' });
+          this.sfxSoft('discharge');
+        }
+      }
+    }
+
+    // Semicondutor Reverso: bloqueia, até um grampeamento colocá-lo em condução direta
+    if (bh.reverse) {
+      if (type === 'grampeamento' && now >= e.forwardUntil) {
+        e.forwardUntil = now + bh.reverse.dur;
+        this.addFx({ kind: 'text', x: e.x, y: e.y - e.def.radius - 8, r: 0, dur: 1, color: '#8bb4ff', text: 'condução direta' });
+      }
+      if (now < e.forwardUntil) m *= 1 + bh.reverse.bonus;
+      else if (type === 'comutacao' || type === 'grampeamento') m *= bh.reverse.block;
+    }
+
+    // Arco Voltaico / Singularidade: resistências que giram entre os tipos de dano
+    const cyc = bh.cycleResist;
+    if (cyc && now >= (bh.reverse ? 0 : 0)) {
+      const idx = Math.floor((now - e.bornAt) / cyc.every) % cyc.types.length;
+      if (cyc.types[idx] === type) m *= 1 - cyc.amount;
+    }
+
+    // Saturação Profunda: o magnético preenche o medidor em vez de reduzir a vida
+    if (bh.satMeter && now >= e.satUntil) {
+      const fills = type === 'magnetico' || type === 'termico';
+      if (fills) {
+        e.satFill += amount * m * (type === 'termico' ? bh.satMeter.thermalMul : 1);
+        if (e.satFill >= bh.satMeter.need) {
+          e.satFill = 0;
+          e.satUntil = now + bh.satMeter.dur;
+          this.addFx({ kind: 'ring', x: e.x, y: e.y, r: e.def.radius + 22, dur: 0.6, color: '#ffffff' });
+          this.addFx({ kind: 'text', x: e.x, y: e.y - e.def.radius - 8, r: 0, dur: 1.2, color: '#7d5fd6', text: 'SATURADO!' });
+          this.sfxSoft('pulse');
+        }
+      }
+      // enquanto não saturou, o dano magnético não fere (só satura)
+      if (type === 'magnetico') {
+        e.flash = 0.1;
+        e.lastHit = now;
+        return;
+      }
+    }
+    // janela de saturação total: sem resistências e sem blindagem
+    if (bh.satMeter && now < e.satUntil) {
+      m = m / (e.def.resist[type] ?? 1);
+      pierce = true;
     }
     if (this.modifiers.includes('instabilidade_circuito')) m *= e.def.boss || e.def.behavior.elite ? 0.8 : 0.92;
     // 1.2 — §11: resistências concedidas por modificadores (permanentes, aplicadas uma vez)
@@ -2650,6 +2890,15 @@ export class GameEngine extends Store<number> implements Tickable {
       }
       this.addFx({ kind: 'emp', x: e.x, y: e.y, r: burst.radius, dur: 0.5, color: e.def.color });
       this.criticalHeat(e.x, e.y, 'O Curto-Circuito Franco');
+    }
+    // 1.2 — §4.4: Supercapacitor Instável libera a carga acumulada ao ser destruído
+    const dis = e.def.behavior.deathDischarge;
+    if (dis && e.charge > 0) {
+      const frac = e.def.behavior.accumulate ? Math.min(1, e.charge / e.def.behavior.accumulate.max) : 1;
+      const stun = dis.stun * frac;
+      this.emp(e.x, e.y, dis.radius, stun, stun * 0.35, e.def.color);
+      this.addFx({ kind: 'discharge', x: e.x, y: e.y, r: dis.radius, dur: 0.7, color: e.def.color });
+      this.criticalHeat(e.x, e.y, e.def.name);
     }
     // Calor conduzido para os vizinhos
     if (e.heat >= 2) {

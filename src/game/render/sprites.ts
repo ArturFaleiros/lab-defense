@@ -1150,6 +1150,275 @@ export function drawEnemy(ctx: Ctx, e: EnemyInst, t: number, stunned: boolean, s
       ctx.fillText('⏻', 0, 1);
       break;
     }
+
+    /* ==================== Patch 1.2 — §4 ==================== */
+
+    case 'dieletrico': {
+      // bloco isolante com uma trilha de ruptura carbonizada
+      const broken = t < e.dielUntil;
+      ctx.beginPath();
+      ctx.roundRect(-r * 0.8, -r * 0.7, r * 1.6, r * 1.4, 4);
+      ctx.fill();
+      ctx.strokeStyle = broken ? '#ffffff' : c;
+      ctx.lineWidth = broken ? 2.4 : 1.4;
+      ctx.stroke();
+      // caminho de ruptura em zigue-zague
+      ctx.strokeStyle = broken ? '#ffffff' : '#0b111a';
+      ctx.lineWidth = 1.8;
+      ctx.beginPath();
+      ctx.moveTo(-r * 0.7, -r * 0.5);
+      ctx.lineTo(-r * 0.2, 0);
+      ctx.lineTo(-r * 0.5, r * 0.2);
+      ctx.lineTo(r * 0.2, r * 0.5);
+      ctx.stroke();
+      if (broken) {
+        ctx.globalAlpha = 0.5 + 0.5 * Math.abs(Math.sin(t * 12));
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = 1.2;
+        ctx.beginPath();
+        ctx.arc(0, 0, r + 5, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.globalAlpha = 1;
+      }
+      break;
+    }
+
+    case 'ambulante': {
+      // faísca veloz com rastro
+      star(ctx, r, 5, 0.4, -t * 9 + e.uid);
+      ctx.fill();
+      ctx.strokeStyle = c;
+      ctx.lineWidth = 1.6;
+      ctx.globalAlpha = 0.6;
+      for (let k = 1; k <= 3; k++) {
+        ctx.beginPath();
+        ctx.arc(-k * 5, 0, r * (1 - k * 0.22), Math.PI * 0.6, Math.PI * 1.4);
+        ctx.stroke();
+      }
+      ctx.globalAlpha = 1;
+      break;
+    }
+
+    case 'faraday': {
+      // gaiola: hexágono com malha interna
+      poly(ctx, r, 6, Math.PI / 6);
+      ctx.fill();
+      ctx.strokeStyle = '#e4ebf3';
+      ctx.lineWidth = 1.2;
+      poly(ctx, r, 6, Math.PI / 6);
+      ctx.stroke();
+      ctx.lineWidth = 0.9;
+      ctx.globalAlpha = 0.8;
+      for (let i = -2; i <= 2; i++) {
+        ctx.beginPath();
+        ctx.moveTo(i * (r / 2.6), -r * 0.8);
+        ctx.lineTo(i * (r / 2.6), r * 0.8);
+        ctx.moveTo(-r * 0.8, i * (r / 2.6));
+        ctx.lineTo(r * 0.8, i * (r / 2.6));
+        ctx.stroke();
+      }
+      ctx.globalAlpha = 1;
+      break;
+    }
+
+    case 'supercap': {
+      // duas placas de supercapacitor; o preenchimento mostra a carga acumulada
+      const frac = e.def.behavior.accumulate ? Math.min(1, e.charge / e.def.behavior.accumulate.max) : 0;
+      ctx.beginPath();
+      ctx.roundRect(-r * 0.85, -r * 0.8, r * 1.7, r * 1.6, 3);
+      ctx.fillStyle = '#1b2430';
+      ctx.fill();
+      ctx.strokeStyle = c;
+      ctx.lineWidth = 1.6;
+      ctx.stroke();
+      ctx.fillStyle = e.flash > 0 ? '#ffffff' : c;
+      ctx.fillRect(-r * 0.85, r * 0.8 - r * 1.6 * frac, r * 1.7, r * 1.6 * frac);
+      // terminais
+      ctx.strokeStyle = '#e4ebf3';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(-r * 0.3, -r * 0.8);
+      ctx.lineTo(-r * 0.3, -r * 1.25);
+      ctx.moveTo(r * 0.3, -r * 0.8);
+      ctx.lineTo(r * 0.3, -r * 1.25);
+      ctx.stroke();
+      if (frac > 0.75) {
+        ctx.strokeStyle = '#ffffff';
+        ctx.globalAlpha = 0.4 + 0.6 * Math.abs(Math.sin(t * 8));
+        ctx.lineWidth = 1.4;
+        ctx.beginPath();
+        ctx.arc(0, 0, r + 6, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.globalAlpha = 1;
+      }
+      break;
+    }
+
+    case 'reverso': {
+      // símbolo de diodo invertido; acende quando entra em condução direta
+      const fwd = t < e.forwardUntil;
+      ctx.fillStyle = fwd ? '#ffffff' : c;
+      ctx.beginPath();
+      ctx.moveTo(r * 0.7, -r * 0.7);
+      ctx.lineTo(r * 0.7, r * 0.7);
+      ctx.lineTo(-r * 0.5, 0);
+      ctx.closePath();
+      ctx.fill();
+      ctx.strokeStyle = fwd ? '#ffffff' : '#e4ebf3';
+      ctx.lineWidth = 2.2;
+      ctx.beginPath();
+      ctx.moveTo(-r * 0.6, -r * 0.8);
+      ctx.lineTo(-r * 0.6, r * 0.8);
+      ctx.stroke();
+      if (fwd) {
+        ctx.globalAlpha = 0.6;
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = 1.2;
+        ctx.beginPath();
+        ctx.arc(0, 0, r + 5, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.globalAlpha = 1;
+      }
+      break;
+    }
+
+    case 'voltaico': {
+      // coluna de arco entre dois eletrodos
+      ctx.strokeStyle = '#9fb0c6';
+      ctx.lineWidth = 2.4;
+      ctx.beginPath();
+      ctx.moveTo(-r * 0.9, -r);
+      ctx.lineTo(-r * 0.9, r);
+      ctx.moveTo(r * 0.9, -r);
+      ctx.lineTo(r * 0.9, r);
+      ctx.stroke();
+      ctx.strokeStyle = e.flash > 0 ? '#ffffff' : c;
+      ctx.lineWidth = 2;
+      ctx.shadowBlur = 12;
+      ctx.beginPath();
+      ctx.moveTo(-r * 0.9, 0);
+      for (let i = 1; i <= 4; i++) {
+        const x = -r * 0.9 + (i * r * 1.8) / 4;
+        const y = Math.sin(t * 14 + i * 2 + e.uid) * r * 0.45;
+        ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+      break;
+    }
+
+    case 'saturacaoprofunda': {
+      // núcleo com curva de histerese; o anel mostra o medidor de saturação
+      const sm = e.def.behavior.satMeter;
+      const open = t < e.satUntil;
+      poly(ctx, r, 4, Math.PI / 4);
+      ctx.fillStyle = open ? '#ffffff' : e.flash > 0 ? '#ffffff' : c;
+      ctx.fill();
+      ctx.strokeStyle = '#2a2140';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      // laço B-H estilizado
+      ctx.strokeStyle = '#0b111a';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(-r * 0.45, r * 0.35);
+      ctx.bezierCurveTo(-r * 0.1, r * 0.5, r * 0.2, -r * 0.1, r * 0.45, -r * 0.35);
+      ctx.bezierCurveTo(r * 0.1, -r * 0.5, -r * 0.2, r * 0.1, -r * 0.45, r * 0.35);
+      ctx.stroke();
+      if (sm && e.satFill > 0 && !open) {
+        ctx.strokeStyle = '#c0a6ff';
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.arc(0, 0, r + 5, -Math.PI / 2, -Math.PI / 2 + Math.min(1, e.satFill / sm.need) * Math.PI * 2);
+        ctx.stroke();
+      }
+      break;
+    }
+
+    case 'parasita': {
+      // oscilação parasita: senoide desgovernada dentro de um círculo
+      ctx.beginPath();
+      ctx.arc(0, 0, r * 0.85, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = '#1a1026';
+      ctx.lineWidth = 1.4;
+      ctx.stroke();
+      ctx.strokeStyle = e.flash > 0 ? '#ffffff' : '#1a1026';
+      ctx.lineWidth = 1.8;
+      ctx.beginPath();
+      for (let i = -6; i <= 6; i++) {
+        const x = (i * r * 0.7) / 6;
+        const y = Math.sin(i * 1.1 + t * 11 + e.uid) * r * 0.42;
+        if (i === -6) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+      // janela de interferência ativa
+      if (t < e.jamUntil) {
+        ctx.strokeStyle = c;
+        ctx.lineWidth = 1.2;
+        ctx.globalAlpha = 0.55;
+        for (let k = 1; k <= 2; k++) {
+          ctx.beginPath();
+          ctx.arc(0, 0, r + 4 + k * 5 + Math.sin(t * 6) * 2, 0, Math.PI * 2);
+          ctx.stroke();
+        }
+        ctx.globalAlpha = 1;
+      }
+      break;
+    }
+
+    case 'singularidade': {
+      // §13: núcleo de plasma colapsando, com anéis de campo e braços de descarga
+      const charging = e.annih === 1;
+      ctx.save();
+      // halo de campo
+      const halo = ctx.createRadialGradient(0, 0, r * 0.2, 0, 0, r * 1.6);
+      halo.addColorStop(0, '#ffffff');
+      halo.addColorStop(0.35, c);
+      halo.addColorStop(1, 'rgba(255,95,240,0)');
+      ctx.fillStyle = halo;
+      ctx.globalAlpha = charging ? 0.95 : 0.7;
+      ctx.beginPath();
+      ctx.arc(0, 0, r * 1.6, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.globalAlpha = 1;
+      // núcleo
+      ctx.fillStyle = e.flash > 0 || charging ? '#ffffff' : '#2a0b26';
+      ctx.beginPath();
+      ctx.arc(0, 0, r * 0.52, 0, Math.PI * 2);
+      ctx.fill();
+      // anéis de campo em rotações opostas
+      ctx.strokeStyle = c;
+      ctx.lineWidth = 2.2;
+      for (let k = 0; k < 3; k++) {
+        const a = t * (k % 2 ? -1.6 : 1.9) + k;
+        ctx.save();
+        ctx.rotate(a);
+        ctx.beginPath();
+        ctx.ellipse(0, 0, r * (0.95 + k * 0.22), r * (0.34 + k * 0.1), 0, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.restore();
+      }
+      // braços de descarga
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = charging ? 2.2 : 1.4;
+      ctx.globalAlpha = charging ? 1 : 0.75;
+      const arms = charging ? 8 : 5;
+      for (let i = 0; i < arms; i++) {
+        const a = (i / arms) * Math.PI * 2 + t * 2.4;
+        ctx.beginPath();
+        ctx.moveTo(Math.cos(a) * r * 0.5, Math.sin(a) * r * 0.5);
+        for (let s = 1; s <= 3; s++) {
+          const rr = r * (0.5 + s * 0.28);
+          const aa = a + Math.sin(t * 9 + i + s) * 0.22;
+          ctx.lineTo(Math.cos(aa) * rr, Math.sin(aa) * rr);
+        }
+        ctx.stroke();
+      }
+      ctx.globalAlpha = 1;
+      ctx.restore();
+      break;
+    }
   }
   ctx.shadowBlur = 0;
   ctx.globalAlpha = 1;

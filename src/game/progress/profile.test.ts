@@ -21,6 +21,9 @@ const stats = (over: Partial<MatchStats> = {}): MatchStats => ({
   abilities: 0,
   rectified: 0,
   capsules: [],
+  annihilated: 0,
+  unitsLostToBoss: 0,
+  autoUpgrades: 0,
   ...over,
 });
 

@@ -51,7 +51,17 @@ export type EnemyId =
   | 'transiente'
   | 'saturado'
   | 'ressonancia'
-  | 'apagao';
+  | 'apagao'
+  // Patch 1.2
+  | 'dieletrico'
+  | 'ambulante'
+  | 'faraday'
+  | 'supercap'
+  | 'reverso'
+  | 'voltaico'
+  | 'saturacaoprofunda'
+  | 'parasita'
+  | 'singularidade';
 
 export type UnitClass = 'DPS' | 'Burst' | 'Support' | 'Control' | 'Economy' | 'Hybrid' | 'Defense';
 

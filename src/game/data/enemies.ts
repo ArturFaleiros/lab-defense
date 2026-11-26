@@ -53,6 +53,47 @@ export interface EnemyBehavior {
   brownout?: { radius: number; amount: number };
   /** inimigo de elite (recebe mais efeito de alguns modificadores) */
   elite?: boolean;
+  /* ---------- Patch 1.2 ---------- */
+  /**
+   * Dielétrico Rompido: acumula o dano ELÉTRICO recebido; ao passar do limiar, o isolamento
+   * rompe e ele perde as resistências por `dur` segundos (e sofre +25% de dano).
+   */
+  dielectric?: { threshold: number; dur: number };
+  /**
+   * Interferência na cadência das unidades próximas. Sem `every`, é contínua (Curto-Circuito
+   * Ambulante); com `every`/`dur`, é periódica (Oscilador Parasita).
+   */
+  jam?: { radius: number; amount: number; every?: number; dur?: number };
+  /** Resistência parcial a controle (0,6 = sofre 40% do atordoamento e da lentidão). */
+  controlResist?: number;
+  /**
+   * Supercapacitor Instável: acumula energia ao longo do percurso (fração da vida máxima por
+   * segundo, até `max`), vira escudo, e descarrega ao ser destruído.
+   */
+  accumulate?: { rate: number; max: number };
+  deathDischarge?: { radius: number; stun: number };
+  /**
+   * Semicondutor Reverso: polarização reversa. Bloqueia a maior parte do dano de comutação e
+   * grampeamento, MAS um golpe de grampeamento (diodo) o coloca em condução direta por
+   * `dur` s — nessa janela recebe dano total e `bonus` extra.
+   */
+  reverse?: { block: number; dur: number; bonus: number };
+  /** Arco Voltaico: descargas de contato que desativam unidades próximas ao passar. */
+  contact?: { every: number; radius: number; stun: number };
+  /** Arco Voltaico: alterna qual tipo de dano resiste (resistências variáveis). */
+  cycleResist?: { every: number; types: DamageType[]; amount: number };
+  /**
+   * Saturação Profunda: enquanto o medidor de saturação não enche, o dano MAGNÉTICO não
+   * reduz a vida — só preenche o medidor (e o desacelera). Cheio, ele fica totalmente
+   * vulnerável por `dur` s. Dano térmico enche o medidor `thermalMul`× mais rápido.
+   */
+  satMeter?: { need: number; dur: number; thermalMul: number };
+  /**
+   * §13 — Aniquilação eletromagnética. Ao atingir `at` (fração da vida máxima), o chefe para,
+   * carrega por `charge` segundos e então DESTRÓI todas as unidades posicionadas. Acontece
+   * uma única vez por chefe; nenhuma proteção convencional evita a remoção.
+   */
+  annihilate?: { at: number; charge: number };
 }
 
 export type PhaseAction = 'emp' | 'shield' | 'blackout' | 'spawnFuga' | 'spawnTrans' | 'open';
@@ -78,6 +119,74 @@ export interface EnemyDef {
   tech: string;
   counter: string;
 }
+
+/* ====================================================================== */
+/* §13 — Chefe final do modo Impossível                                    */
+/* ====================================================================== */
+
+/**
+ * SINGULARIDADE ELETROMAGNÉTICA — uma instalação de potência que perdeu o controle de si
+ * mesma: o plasma do barramento deixou de ser contido, os campos se realimentam e o conjunto
+ * caminha para uma falha catastrófica.
+ *
+ * Identidade: plasma, alta tensão, campos eletromagnéticos, saturação magnética, descargas e
+ * instabilidade de potência. Tem barra de vida própria (com os marcos de fase e o limiar de
+ * aniquilação), modelo exclusivo, animação de carregamento e aviso global.
+ *
+ * Aniquilação (§13.1): aos 25% da vida máxima, interrompe a movimentação, carrega por 3,5 s
+ * com efeitos de concentração de energia e aviso global, e então remove TODAS as unidades
+ * posicionadas. Uma única vez por chefe.
+ */
+const SINGULARIDADE: EnemyDef = {
+  id: 'singularidade',
+  name: 'Singularidade Eletromagnética',
+  // 1.2: calibrada para que a aniquilação (25%) seja alcançável por uma composição forte
+  // nas fases de hpScale alto — ver scripts de verificação no relatório do patch.
+  hp: 24000,
+  speed: 17,
+  armor: 8,
+  reward: 1600,
+  leak: 99,
+  radius: 34,
+  color: '#ff5ff0',
+  boss: true,
+  // campos realimentados: resiste a tudo, sem imunidade a nada
+  resist: { magnetico: 0.82, comutacao: 0.86, descarga: 0.86, grampeamento: 0.86, termico: 0.88 },
+  behavior: {
+    annihilate: { at: 0.25, charge: 3.5 },
+    // saturação magnética do núcleo em colapso + descargas de contato do plasma
+    saturates: true,
+    contact: { every: 5, radius: 150, stun: 1.6 },
+    cycleResist: { every: 6, types: ['magnetico', 'descarga', 'comutacao', 'termico'], amount: 0.35 },
+    brownout: { radius: 170, amount: 0.18 },
+    harmonic: { every: 11, radius: 230, boost: 0.35, dur: 3 },
+    phases: [0.75, 0.5],
+    phaseActions: [
+      ['emp', 'shield', 'spawnTrans'],
+      ['blackout', 'shield', 'spawnFuga'],
+    ],
+    spawnEvery: 10,
+    spawnId: 'ambulante',
+    spawnCount: 2,
+    elite: true,
+  },
+  weakTo: { cristal: 1.25, igbt: 1.2 },
+  traits: [
+    'Chefe final do modo Impossível',
+    'Instabilidade de potência: resiste a todos os tipos de dano e alterna qual resiste mais a cada 6 s',
+    'Subtensão: unidades a até 170 causam −18% de dano',
+    'Descarga de contato: a cada 5 s desativa por 1,6 s as unidades a até 150',
+    'A cada 11 s, uma onda harmônica acelera os inimigos a até 230',
+    'Gera 2 Curtos-Circuitos Ambulantes a cada 10 s',
+    '75%: pulso, escudo e Transientes · 50%: rejeição de carga, escudo e Fugas',
+    '25%: ANIQUILAÇÃO ELETROMAGNÉTICA — destrói TODAS as unidades posicionadas',
+    'Alcançar o núcleo = derrota',
+  ],
+  tech:
+    'Representa a falha catastrófica de um sistema eletroeletrônico de potência: quando a proteção não isola a falta a tempo, a energia armazenada nos barramentos, capacitores e indutores é liberada de uma vez. Em instalações reais, esse evento tem nome — arc flash: a pressão, a luz e o calor do arco destroem o painel inteiro em milissegundos. A “singularidade” é a licença poética para esse ponto sem retorno, em que a realimentação entre campo, corrente e temperatura deixa de ter solução estável.',
+  counter:
+    'Aceite a aniquilação: guarde créditos para reconstruir rápido depois dos 25% e leve-o o mais perto possível da morte antes disso. O Oscilador de Cristal (+25%) impõe frequência ao caos e o IGBT (+20%) atravessa a blindagem. Diodos reduzem os pulsos, mas NÃO evitam a aniquilação.',
+};
 
 export const ENEMIES: Record<EnemyId, EnemyDef> = {
   curto: {
@@ -434,4 +543,204 @@ export const ENEMIES: Record<EnemyId, EnemyDef> = {
     tech: 'Perda total de alimentação de um sistema, normalmente após falhas em cascata que a proteção não isolou a tempo.',
     counter: 'Economia guardada antes dos 75%, dano magnético para a fase aberta e diodos contra os pulsos.',
   },
+
+  /* ========================= Patch 1.2 — §4 ========================= */
+
+  dieletrico: {
+    id: 'dieletrico',
+    name: 'Dielétrico Rompido',
+    hp: 520,
+    speed: 44,
+    armor: 2,
+    reward: 30,
+    leak: 2,
+    radius: 15,
+    color: '#6fd4ff',
+    // isolante degradado: segura muito bem o elétrico, mas não o calor
+    resist: { descarga: 0.4, comutacao: 0.5, grampeamento: 0.45, magnetico: 0.7, termico: 1.6 },
+    behavior: { dielectric: { threshold: 600, dur: 4 }, elite: true },
+    traits: [
+      'Elite isolante: resiste muito a descarga, comutação e grampeamento',
+      'Fraco contra dano térmico (+60%)',
+      'Ruptura dielétrica: ao acumular dano elétrico, o isolamento rompe e ele perde TODAS as resistências por 4 s (+25% de dano)',
+    ],
+    tech: 'Todo isolante suporta um campo elétrico máximo (rigidez dielétrica). Acima dele, o material ioniza e passa a conduzir: é a ruptura dielétrica, que em sólidos deixa um caminho carbonizado permanente.',
+    counter: 'Resistor e Plasma (calor) derretem a resistência. Ou insista no dano elétrico até provocar a ruptura e aproveite a janela de 4 s com tudo.',
+  },
+
+  ambulante: {
+    id: 'ambulante',
+    name: 'Curto-Circuito Ambulante',
+    hp: 95,
+    speed: 135,
+    armor: 0,
+    reward: 13,
+    leak: 1,
+    radius: 10,
+    color: '#ff4d6d',
+    resist: {},
+    // muito rápido, pouca vida, e atrapalha quem ele passa perto
+    behavior: { jam: { radius: 85, amount: 0.3 } },
+    traits: [
+      'Velocidade altíssima e pouca vida',
+      'Interferência de contato: unidades a até 85 perdem 30% de cadência enquanto ele estiver por perto',
+      'Protegidas por diodo e com Isolamento ignoram a interferência',
+    ],
+    tech: 'Um curto em movimento arrasta a corrente de falta pelo circuito: a queda de tensão acompanha o ponto de falha, e cada carga próxima sente o afundamento enquanto ele passa.',
+    counter: 'Interrupção e lentidão na entrada da rota, ou dano em área: ele morre rápido, o problema é chegar perto das unidades.',
+  },
+
+  faraday: {
+    id: 'faraday',
+    name: 'Blindagem de Faraday',
+    hp: 760,
+    speed: 38,
+    armor: 4,
+    reward: 38,
+    leak: 2,
+    radius: 16,
+    color: '#9fb0c6',
+    // invólucro condutor: barra o eletromagnético e o controle elétrico
+    resist: { magnetico: 0.35, descarga: 0.6, termico: 1.3, comutacao: 1.15 },
+    behavior: { controlResist: 0.65, elite: true },
+    traits: [
+      'Elite blindada: dano magnético −65% e descarga −40%',
+      'Resiste a controle elétrico: sofre apenas 35% da lentidão e do atordoamento',
+      'Fraco contra calor (+30%) e comutação mecânica (+15%)',
+    ],
+    tech: 'Uma gaiola de Faraday é um invólucro condutor: as cargas se redistribuem e anulam o campo elétrico no interior. Contra campos magnéticos variáveis, correntes induzidas no invólucro se opõem à variação do fluxo (lei de Lenz) e atenuam o que passa.',
+    counter: 'Relé (comutação mecânica), Resistor e Plasma. Não gaste controle elétrico nele: a blindagem absorve quase tudo.',
+  },
+
+  supercap: {
+    id: 'supercap',
+    name: 'Supercapacitor Instável',
+    hp: 430,
+    speed: 42,
+    armor: 1,
+    reward: 32,
+    leak: 2,
+    radius: 15,
+    color: '#ffd166',
+    resist: { descarga: 0.75 },
+    behavior: {
+      // carrega ao longo do percurso (vira escudo) e descarrega ao morrer
+      accumulate: { rate: 0.05, max: 0.6 },
+      deathDischarge: { radius: 110, stun: 2.2 },
+      elite: true,
+    },
+    traits: [
+      'Armazenamento eletroquímico: acumula 5% da vida máxima por segundo como escudo (até 60%)',
+      'Quanto mais tarde você matá-lo, mais forte ele fica',
+      'Ao ser destruído, libera a carga acumulada: desativa por até 2,2 s as unidades a até 110 (proporcional à carga)',
+    ],
+    tech: 'Supercapacitores armazenam energia na dupla camada elétrica, não em reação química: têm capacitância enorme e aceitam carga e descarga muito rápidas, com densidade de potência altíssima.',
+    counter: 'Mate-o CEDO, longe das unidades. Diodos reduzem o atordoamento da descarga; posicionar dano alto na entrada evita que ele chegue carregado.',
+  },
+
+  reverso: {
+    id: 'reverso',
+    name: 'Semicondutor Reverso',
+    hp: 600,
+    speed: 46,
+    armor: 2,
+    reward: 34,
+    leak: 2,
+    radius: 15,
+    color: '#8bb4ff',
+    resist: {},
+    // polarização reversa: bloqueia, até um grampeamento colocá-lo em condução direta
+    behavior: { reverse: { block: 0.25, dur: 3, bonus: 0.5 }, elite: true },
+    weakTo: { diodo: 1.3 },
+    traits: [
+      'Polarização reversa: recebe apenas 25% do dano de comutação e grampeamento',
+      'Um golpe de grampeamento (Diodo) o força à condução direta por 3 s',
+      'Em condução direta: recebe dano total e +50% adicional',
+    ],
+    tech: 'Uma junção PN reversamente polarizada praticamente não conduz: só a corrente de fuga atravessa a região de depleção. Invertida a polaridade, ela entra em condução direta acima da tensão de joelho (~0,7 V no silício) e a corrente cresce exponencialmente.',
+    counter: 'O Diodo é a chave: um golpe dele abre a janela de 3 s em que todo o resto do seu arsenal passa a funcionar. Transistor e MOSFET sozinhos sofrem.',
+  },
+
+  voltaico: {
+    id: 'voltaico',
+    name: 'Arco Voltaico',
+    hp: 340,
+    speed: 104,
+    armor: 1,
+    reward: 28,
+    leak: 2,
+    radius: 13,
+    color: '#fff0a6',
+    resist: {},
+    behavior: {
+      // rápido, com descargas de contato e resistências que giram
+      contact: { every: 2.6, radius: 80, stun: 1 },
+      cycleResist: { every: 3.5, types: ['magnetico', 'descarga', 'comutacao', 'termico'], amount: 0.3 },
+    },
+    traits: [
+      'Muito rápido',
+      'Descarga de contato: a cada 2,6 s desativa por 1 s as unidades a até 80',
+      'Resistências variáveis: a cada 3,5 s passa a receber 30% menos de um tipo de dano diferente',
+    ],
+    tech: 'Um arco voltaico é plasma conduzindo entre dois eletrodos separados. A coluna ionizada tem resistência negativa (a tensão cai quando a corrente sobe) e se desloca com os campos e as correntes de ar — é por isso que o arco “anda”.',
+    counter: 'Equipe com tipos de dano variados (ele só resiste a um por vez) e diodos para anular as descargas de contato.',
+  },
+
+  saturacaoprofunda: {
+    id: 'saturacaoprofunda',
+    name: 'Saturação Profunda do Núcleo',
+    hp: 1600,
+    speed: 28,
+    armor: 7,
+    reward: 62,
+    leak: 3,
+    radius: 19,
+    color: '#7d5fd6',
+    resist: { comutacao: 0.85, descarga: 0.85, grampeamento: 0.85 },
+    behavior: {
+      // o dano magnético não fere: ele preenche o medidor de saturação
+      satMeter: { need: 1400, dur: 5, thermalMul: 2.5 },
+      elite: true,
+    },
+    weakTo: { resistor: 1.4, plasma: 1.3 },
+    traits: [
+      'Elite de vida muito alta e blindagem pesada (−7)',
+      'Enquanto não satura, o dano MAGNÉTICO não reduz a vida: só enche o medidor de saturação (e o desacelera)',
+      'Dano térmico enche o medidor 2,5× mais rápido',
+      'Medidor cheio: fica totalmente vulnerável por 5 s (o medidor zera depois)',
+      'Fraco contra Resistor (+40%) e Plasma (+30%)',
+    ],
+    tech: 'Em saturação profunda, os domínios magnéticos do núcleo já estão alinhados: por mais que a corrente aumente, o fluxo quase não cresce e a indutância efetiva despenca. O núcleo deixa de transformar corrente em campo útil e a energia vira calor.',
+    counter: 'Use o magnético para SATURÁ-LO (não para matá-lo) e o térmico para encher o medidor rápido; quando a janela de 5 s abrir, concentre todo o dano.',
+  },
+
+  parasita: {
+    id: 'parasita',
+    name: 'Oscilador Parasita',
+    hp: 480,
+    speed: 48,
+    armor: 1,
+    reward: 33,
+    leak: 2,
+    radius: 15,
+    color: '#c77dff',
+    resist: {},
+    behavior: {
+      // interferência periódica na cadência + resistência parcial a controle
+      jam: { radius: 125, amount: 0.4, every: 6, dur: 2.5 },
+      controlResist: 0.6,
+      elite: true,
+    },
+    weakTo: { cristal: 1.5, ci555: 1.35 },
+    traits: [
+      'A cada 6 s, por 2,5 s, as unidades a até 125 perdem 40% de cadência',
+      'Resiste parcialmente a controle: sofre 40% da lentidão e do atordoamento',
+      'Fraco contra o Oscilador de Cristal (+50%) e o CI 555 (+35%)',
+    ],
+    tech: 'Oscilação parasita é uma oscilação não projetada, sustentada por indutâncias e capacitâncias parasitas das trilhas e dos encapsulamentos. Com realimentação involuntária e ganho suficiente, o circuito oscila em alta frequência e contamina tudo ao redor.',
+    counter: 'Temporizadores estáveis (Cristal, CI 555) impõem a frequência correta e causam dano extra. Diodos e Isolamento protegem as unidades da interferência.',
+  },
+
+  /* ---- §13: chefe final do modo Impossível ---- */
+  singularidade: SINGULARIDADE,
 };
