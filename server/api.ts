@@ -44,6 +44,13 @@ interface Player {
   nick_key: string;
   token_hash: Uint8Array;
   banned: boolean;
+  ban_reason: string | null;
+}
+
+/** Banimento com o motivo registrado no banco (exibido ao jogador). */
+function bannedError(kind: 'player' | 'ip', reason: string | null): HttpError {
+  const msg = kind === 'ip' ? 'O acesso a partir desta conexão (IP) foi bloqueado.' : 'Este jogador foi banido.';
+  return new HttpError(403, 'banned', msg, { banKind: kind, reason: reason?.trim() || null });
 }
 
 const sha256 = (s: string) => createHash('sha256').update(s).digest();
@@ -78,8 +85,8 @@ async function audit(q: Queryer, kind: string, ip: string | null, playerId: stri
 
 async function assertIpAllowed(q: Queryer, ip: string | null): Promise<void> {
   if (!ip) return;
-  const { rows } = await q.query('select 1 from labdefense.ip_bans where ip = $1', [ip]);
-  if (rows.length) throw new HttpError(403, 'banned', 'Acesso bloqueado.');
+  const { rows } = await q.query<{ reason: string | null }>('select reason from labdefense.ip_bans where ip = $1', [ip]);
+  if (rows.length) throw bannedError('ip', rows[0].reason);
 }
 
 /** Identifica o jogador pelo cookie de sessão (id + segredo; o banco guarda só o hash). */
@@ -88,7 +95,7 @@ async function authenticate(q: Queryer, req: Request): Promise<Player | null> {
   if (!raw) return null;
   const [id, secret] = raw.split('.');
   if (!id || !secret || !UUID.test(id) || secret.length > 80) return null;
-  const { rows } = await q.query<Player>('select id, nick, nick_key, token_hash, banned from labdefense.players where id = $1', [id]);
+  const { rows } = await q.query<Player>('select id, nick, nick_key, token_hash, banned, ban_reason from labdefense.players where id = $1', [id]);
   const p = rows[0];
   if (!p || !sameBytes(p.token_hash, sha256(secret))) return null;
   return p;
@@ -97,7 +104,7 @@ async function authenticate(q: Queryer, req: Request): Promise<Player | null> {
 async function requirePlayer(q: Queryer, req: Request, ip: string | null): Promise<Player> {
   const p = await authenticate(q, req);
   if (!p) throw new HttpError(401, 'no_session', 'Entre com um nick para jogar.');
-  if (p.banned) throw new HttpError(403, 'banned', 'Este jogador foi bloqueado.');
+  if (p.banned) throw bannedError('player', p.ban_reason);
   await q.query('update labdefense.players set last_seen_at = now(), last_ip = coalesce($2::inet, last_ip) where id = $1', [p.id, ip]);
   if (ip) {
     await q.query(
@@ -183,6 +190,7 @@ async function sessionRoute(req: Request, ip: string | null): Promise<Response> 
 
     const current = await authenticate(q, req);
     if (current) {
+      if (current.banned) throw bannedError('player', current.ban_reason);
       if (current.nick_key === key) {
         const { profile } = await loadProfileFor(q, current.id);
         return json(200, { nick: current.nick, profile });
@@ -190,7 +198,7 @@ async function sessionRoute(req: Request, ip: string | null): Promise<Response> 
       throw new HttpError(409, 'other_session', `Este navegador já está conectado como ${current.nick}. Saia em Ajustes para trocar de jogador.`);
     }
 
-    const { rows } = await q.query<Player>('select id, nick, nick_key, token_hash, banned from labdefense.players where nick_key = $1', [key]);
+    const { rows } = await q.query<Player>('select id, nick, nick_key, token_hash, banned, ban_reason from labdefense.players where nick_key = $1', [key]);
     const existing = rows[0];
     if (existing) {
       // nick já cadastrado: só entra quem tem o código de acesso (outro navegador/dispositivo)
@@ -199,7 +207,7 @@ async function sessionRoute(req: Request, ip: string | null): Promise<Response> 
         await audit(q, 'session_fail', ip, existing.id);
         throw new HttpError(403, 'bad_code', 'Código de acesso incorreto.');
       }
-      if (existing.banned) throw new HttpError(403, 'banned', 'Este jogador foi bloqueado.');
+      if (existing.banned) throw bannedError('player', existing.ban_reason);
       await audit(q, 'session_login', ip, existing.id);
       await q.query('update labdefense.players set last_seen_at = now(), last_ip = $2 where id = $1', [existing.id, ip]);
       const { profile } = await loadProfileFor(q, existing.id);

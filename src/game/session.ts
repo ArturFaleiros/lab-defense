@@ -39,7 +39,13 @@ export interface Toast {
   tone: 'info' | 'warn' | 'boss' | 'ok' | 'unlock';
 }
 
-export type AuthState = 'loading' | 'anon' | 'ready' | 'offline';
+export type AuthState = 'loading' | 'anon' | 'ready' | 'offline' | 'banned';
+
+/** Banimento informado pelo servidor (jogador ou IP), com o motivo registrado. */
+export interface BanInfo {
+  kind: 'player' | 'ip';
+  reason: string | null;
+}
 
 export interface SessionState {
   screen: Screen;
@@ -63,6 +69,7 @@ export interface SessionState {
   /** operação em andamento (iniciar/verificar partida) */
   busy: 'start' | 'verify' | null;
   netError: string | null;
+  ban: BanInfo | null;
 }
 
 export interface CapsuleView {
@@ -106,6 +113,7 @@ class GameSession extends Store<SessionState> {
       accessCode: null,
       busy: null,
       netError: null,
+      ban: null,
     };
     if (typeof window !== 'undefined') void this.refresh();
   }
@@ -133,14 +141,30 @@ class GameSession extends Store<SessionState> {
       if (r.nick === null) this.set({ auth: 'anon', nick: null });
       else this.applyPlayer(r as PlayerResponse);
     } catch (e) {
+      if (this.checkBanned(e)) return;
       if (e instanceof ApiError && e.status === 401) this.set({ auth: 'anon', nick: null });
       else this.set({ auth: 'offline', netError: (e as Error).message });
     }
   }
 
+  /** Se o erro for de banimento, troca para a tela de banido (com o motivo). */
+  checkBanned(e: unknown): boolean {
+    if (!(e instanceof ApiError) || e.code !== 'banned') return false;
+    const reason = typeof e.data.reason === 'string' && e.data.reason.trim() ? e.data.reason.trim() : null;
+    this.endEngine();
+    this.set({ auth: 'banned', ban: { kind: e.data.banKind === 'ip' ? 'ip' : 'player', reason }, engine: null, busy: null, screen: { id: 'menu' } });
+    return true;
+  }
+
   /** Entra com um nick (novo) ou com nick + código de acesso (outro dispositivo). */
   async enter(nick: string, code?: string): Promise<void> {
-    const r = await api.enter(nick, code);
+    let r: PlayerResponse;
+    try {
+      r = await api.enter(nick, code);
+    } catch (e) {
+      if (this.checkBanned(e)) return;
+      throw e;
+    }
     this.applyPlayer(r);
     if (r.code) this.set({ accessCode: r.code });
   }
@@ -184,6 +208,7 @@ class GameSession extends Store<SessionState> {
   }
 
   private onNetError(e: unknown): void {
+    if (this.checkBanned(e)) return;
     const msg = e instanceof Error ? e.message : 'Falha na comunicação com o servidor.';
     if (e instanceof ApiError && e.status === 401) this.set({ auth: 'anon', nick: null });
     this.set({ saveFailed: true, netError: msg });

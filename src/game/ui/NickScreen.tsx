@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from 'react';
-import { KeyRound, LogIn, RefreshCw, ShieldCheck, WifiOff } from 'lucide-react';
+import { Ban, KeyRound, LogIn, LogOut, RefreshCw, ShieldCheck, WifiOff } from 'lucide-react';
 import { session, useSession } from '../session';
 import { ApiError } from '../net/api';
 import { Button } from '../../components/ui';
@@ -7,7 +7,7 @@ import { GameLogo } from './GameLogo';
 
 /** Tela de entrada: o jogo só começa depois de escolher um nick. */
 export function NickScreen() {
-  const { auth, netError } = useSession();
+  const { auth, netError, ban } = useSession();
   const [nick, setNick] = useState('');
   const [code, setCode] = useState('');
   const [needCode, setNeedCode] = useState(false);
@@ -20,6 +20,31 @@ export function NickScreen() {
         <div className="gd-login__card gd-login__card--center">
           <GameLogo />
           <p className="gd-muted">Conectando ao servidor…</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (auth === 'banned') {
+    return (
+      <div className="gd-login">
+        <div className="gd-login__card gd-login__card--center gd-login__card--banned" role="alert">
+          <Ban size={32} className="gd-login__ban-icon" />
+          <h2 className="gd-h2">{ban?.kind === 'ip' ? 'Acesso bloqueado' : 'Você foi banido'}</h2>
+          <p className="gd-muted">
+            {ban?.kind === 'ip'
+              ? 'O acesso ao Lab Defense a partir desta conexão (endereço IP) foi bloqueado.'
+              : 'Este nick foi banido do Lab Defense e não pode mais jogar.'}
+          </p>
+          <div className="gd-login__ban-reason">
+            <span>Motivo</span>
+            <strong>{ban?.reason ?? 'Não informado'}</strong>
+          </div>
+          {ban?.kind !== 'ip' && (
+            <Button icon={<LogOut />} onClick={() => void session.logout()}>
+              Sair deste nick
+            </Button>
+          )}
         </div>
       </div>
     );

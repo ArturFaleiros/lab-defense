@@ -103,6 +103,40 @@ describe('sessão por nick', () => {
   });
 });
 
+describe('banimento', () => {
+  it('jogador banido vê o motivo e não joga mais (mesmo com o cookie)', async () => {
+    const { cookie } = await newPlayer('Trapaceiro');
+    await raw.query(`update labdefense.players set banned = true, ban_reason = 'uso de cheat' where nick_key = 'trapaceiro'`);
+    const me = await call('me', undefined, { cookie });
+    expect(me.status).toBe(403);
+    expect(me.data).toMatchObject({ error: 'banned', banKind: 'player', reason: 'uso de cheat' });
+    const again = await call('session', { nick: 'Trapaceiro' }, { cookie });
+    expect(again.status).toBe(403);
+    expect(again.data.reason).toBe('uso de cheat');
+    expect((await call('match', { action: 'start', stageId: '1-1', units: ['rele'] }, { cookie })).status).toBe(403);
+  });
+
+  it('banimento por IP bloqueia contas e novos nicks daquele IP, com o motivo', async () => {
+    const ip = '192.0.2.55';
+    const r = await call('session', { nick: 'MesmaRede' }, { ip });
+    expect(r.status).toBe(201);
+    await raw.query(`insert into labdefense.ip_bans (ip, reason) values ($1, 'contas falsas')`, [ip]);
+    const me = await call('me', undefined, { cookie: r.cookie, ip });
+    expect(me.status).toBe(403);
+    expect(me.data).toMatchObject({ error: 'banned', banKind: 'ip', reason: 'contas falsas' });
+    expect((await call('session', { nick: 'NovoNick' }, { ip })).status).toBe(403);
+    // outro IP continua livre
+    expect((await call('me', undefined, { cookie: r.cookie, ip: '192.0.2.56' })).status).toBe(200);
+  });
+
+  it('banimento sem motivo informado', async () => {
+    const { cookie } = await newPlayer('SemMotivo');
+    await raw.query(`update labdefense.players set banned = true where nick_key = 'semmotivo'`);
+    const me = await call('me', undefined, { cookie });
+    expect(me.data).toMatchObject({ error: 'banned', reason: null });
+  });
+});
+
 describe('partidas verificadas pelo servidor', () => {
   it('vitória legítima é re-simulada e recompensada', async () => {
     const { cookie } = await newPlayer('Jogador1');

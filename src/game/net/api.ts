@@ -12,6 +12,8 @@ export class ApiError extends Error {
     readonly status: number,
     readonly code: string,
     message: string,
+    /** corpo completo da resposta de erro (ex.: motivo do banimento) */
+    readonly data: Record<string, unknown> = {},
   ) {
     super(message);
   }
@@ -42,8 +44,8 @@ async function req<T>(path: string, method: 'GET' | 'POST' | 'DELETE', body?: un
     /* corpo vazio ou inválido */
   }
   if (!res.ok) {
-    const d = (data ?? {}) as { error?: string; message?: string };
-    throw new ApiError(res.status, d.error ?? 'error', d.message ?? 'Falha na comunicação com o servidor.');
+    const d = (data ?? {}) as { error?: string; message?: string } & Record<string, unknown>;
+    throw new ApiError(res.status, d.error ?? 'error', d.message ?? 'Falha na comunicação com o servidor.', d);
   }
   return data as T;
 }

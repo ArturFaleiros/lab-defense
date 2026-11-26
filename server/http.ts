@@ -8,6 +8,8 @@ export class HttpError extends Error {
     readonly status: number,
     readonly code: string,
     message: string,
+    /** campos extras devolvidos no corpo da resposta (ex.: motivo do banimento) */
+    readonly extra?: Record<string, unknown>,
   ) {
     super(message);
   }
@@ -27,7 +29,7 @@ export function json(status: number, body: unknown, extra: Record<string, string
 
 /** Resposta de erro sem detalhes internos (nada de stack trace para o cliente). */
 export function errorResponse(e: unknown): Response {
-  if (e instanceof HttpError) return json(e.status, { error: e.code, message: e.message });
+  if (e instanceof HttpError) return json(e.status, { ...e.extra, error: e.code, message: e.message });
   console.error('[api] erro interno', e);
   return json(500, { error: 'internal', message: 'Erro interno. Tente novamente.' });
 }
