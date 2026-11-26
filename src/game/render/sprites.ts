@@ -1,0 +1,930 @@
+import { RARITIES, UNITS } from '../data/units';
+import type { EnemyInst } from '../engine/GameEngine';
+import type { Tier, UnitId } from '../types';
+
+/**
+ * Desenhos procedurais (canvas 2D) das unidades e inimigos. A mesma função desenha a unidade
+ * no mapa e nos cartões da interface, garantindo identidade visual única.
+ */
+
+type Ctx = CanvasRenderingContext2D;
+
+export interface UnitLook {
+  tier: Tier;
+  level: number;
+  /** 0..1: brilho logo após um ataque */
+  fire: number;
+  /** ângulo de mira (rad) */
+  aim: number;
+  /** indutor: corrente; capacitor: energia; outras: 0 */
+  charge: number;
+  stunned: boolean;
+  t: number;
+}
+
+const COPPER = '#c98a4b';
+const INK = '#0b111a';
+
+function base(ctx: Ctx, color: string, look: UnitLook) {
+  // plataforma
+  ctx.beginPath();
+  ctx.arc(0, 0, 16, 0, Math.PI * 2);
+  ctx.fillStyle = '#111b28';
+  ctx.fill();
+  ctx.lineWidth = 2;
+  ctx.strokeStyle = look.stunned ? '#4c5c70' : color;
+  ctx.stroke();
+  // evolução permanente: anéis externos
+  if (look.tier >= 1) {
+    ctx.save();
+    ctx.setLineDash(look.tier === 1 ? [4, 4] : []);
+    ctx.lineDashOffset = -look.t * 8;
+    ctx.beginPath();
+    ctx.arc(0, 0, 19.5, 0, Math.PI * 2);
+    ctx.strokeStyle = color;
+    ctx.globalAlpha = 0.65;
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+    ctx.restore();
+  }
+  if (look.tier >= 2) {
+    ctx.save();
+    ctx.shadowColor = color;
+    ctx.shadowBlur = 10;
+    ctx.beginPath();
+    ctx.arc(0, 0, 22.5, -Math.PI * 0.85, -Math.PI * 0.15);
+    ctx.moveTo(0, 22.5);
+    ctx.arc(0, 0, 22.5, Math.PI * 0.15, Math.PI * 0.85);
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    ctx.restore();
+  }
+  // brilho de disparo
+  if (look.fire > 0) {
+    ctx.beginPath();
+    ctx.arc(0, 0, 16, 0, Math.PI * 2);
+    ctx.fillStyle = color;
+    ctx.globalAlpha = 0.18 * look.fire;
+    ctx.fill();
+    ctx.globalAlpha = 1;
+  }
+}
+
+function pips(ctx: Ctx, level: number, color: string) {
+  if (level <= 0) return;
+  const w = (level - 1) * 6;
+  for (let i = 0; i < level; i++) {
+    ctx.beginPath();
+    ctx.arc(-w / 2 + i * 6, 21, 2, 0, Math.PI * 2);
+    ctx.fillStyle = color;
+    ctx.fill();
+  }
+}
+
+function coil(ctx: Ctx, x: number, y: number, w: number, h: number, turns: number) {
+  ctx.fillStyle = '#5a3a1c';
+  ctx.fillRect(x, y, w, h);
+  ctx.strokeStyle = COPPER;
+  ctx.lineWidth = 1.4;
+  for (let i = 0; i <= turns; i++) {
+    const yy = y + (h * i) / turns;
+    ctx.beginPath();
+    ctx.moveTo(x, yy);
+    ctx.lineTo(x + w, yy);
+    ctx.stroke();
+  }
+}
+
+const DRAW: Record<'rele' | 'bobina' | 'fonte' | 'indutor' | 'diodo' | 'capacitor' | 'rl' | 'transformador', (ctx: Ctx, look: UnitLook, color: string) => void> = {
+  rele(ctx, look, color) {
+    ctx.fillStyle = '#16283a';
+    ctx.fillRect(-10, -9, 20, 18);
+    ctx.strokeStyle = '#2b4562';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(-10, -9, 20, 18);
+    coil(ctx, -8, -6, 7, 12, 5);
+    // armadura: gira quando dispara (contato COM vai ao NO)
+    const ang = look.fire > 0.3 ? -0.35 : 0;
+    ctx.save();
+    ctx.translate(1, 6);
+    ctx.rotate(ang);
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2.2;
+    ctx.beginPath();
+    ctx.moveTo(0, 0);
+    ctx.lineTo(0, -12);
+    ctx.lineTo(7, -12);
+    ctx.stroke();
+    ctx.restore();
+    ctx.fillStyle = look.fire > 0.3 ? '#39d08a' : '#6f8197';
+    ctx.beginPath();
+    ctx.arc(8, -6, 1.8, 0, Math.PI * 2);
+    ctx.fill();
+  },
+  bobina(ctx, look, color) {
+    coil(ctx, -7, -10, 14, 20, 7);
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1.5;
+    ctx.strokeRect(-7, -10, 14, 20);
+    if (look.fire > 0) {
+      ctx.globalAlpha = look.fire;
+      ctx.beginPath();
+      ctx.ellipse(0, 0, 12 + (1 - look.fire) * 6, 5 + (1 - look.fire) * 3, 0, 0, Math.PI * 2);
+      ctx.strokeStyle = color;
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+    }
+  },
+  fonte(ctx, look, color) {
+    ctx.fillStyle = '#15281f';
+    ctx.fillRect(-10, -7, 20, 14);
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1.5;
+    ctx.strokeRect(-10, -7, 20, 14);
+    ctx.fillStyle = color;
+    ctx.fillRect(10, -3, 2.5, 6);
+    ctx.font = '700 9px Inter, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('DC', 0, 0.5);
+    if (look.fire > 0) {
+      ctx.globalAlpha = look.fire;
+      ctx.fillText('+', 0, -13 - (1 - look.fire) * 4);
+      ctx.globalAlpha = 1;
+    }
+  },
+  indutor(ctx, look, color) {
+    // símbolo do indutor: arcos em sequência, brilho proporcional à corrente
+    ctx.save();
+    ctx.shadowColor = color;
+    ctx.shadowBlur = 12 * look.charge;
+    ctx.strokeStyle = look.charge > 0.05 ? color : COPPER;
+    ctx.lineWidth = 2.2;
+    ctx.beginPath();
+    ctx.moveTo(-12, 3);
+    for (let i = 0; i < 4; i++) ctx.arc(-9 + i * 6, 3, 3, Math.PI, 0);
+    ctx.lineTo(12, 3);
+    ctx.stroke();
+    ctx.restore();
+    // barra da corrente
+    ctx.fillStyle = '#1e2a3a';
+    ctx.fillRect(-9, 8, 18, 2.5);
+    ctx.fillStyle = color;
+    ctx.fillRect(-9, 8, 18 * look.charge, 2.5);
+  },
+  diodo(ctx, _look, color) {
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.moveTo(-7, -7);
+    ctx.lineTo(5, 0);
+    ctx.lineTo(-7, 7);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillRect(5, -8, 2.6, 16);
+    ctx.strokeStyle = '#ffd2a6';
+    ctx.lineWidth = 1.4;
+    ctx.beginPath();
+    ctx.moveTo(-12, 0);
+    ctx.lineTo(-7, 0);
+    ctx.moveTo(7.6, 0);
+    ctx.lineTo(12, 0);
+    ctx.stroke();
+  },
+  capacitor(ctx, look, color) {
+    ctx.fillStyle = color;
+    ctx.fillRect(-6, -10, 3, 20);
+    ctx.fillRect(3, -10, 3, 20);
+    ctx.strokeStyle = '#a3b2c4';
+    ctx.lineWidth = 1.4;
+    ctx.beginPath();
+    ctx.moveTo(-12, 0);
+    ctx.lineTo(-6, 0);
+    ctx.moveTo(6, 0);
+    ctx.lineTo(12, 0);
+    ctx.stroke();
+    // energia armazenada (∝ v²) entre as placas
+    ctx.fillStyle = color;
+    ctx.globalAlpha = 0.25 + 0.6 * look.charge;
+    const h = 18 * look.charge;
+    ctx.fillRect(-2.2, 9 - h, 4.4, h);
+    ctx.globalAlpha = 1;
+  },
+  rl(ctx, look, color) {
+    ctx.strokeStyle = '#b9c7d8';
+    ctx.lineWidth = 1.6;
+    ctx.beginPath();
+    ctx.moveTo(-12, -4);
+    for (let i = 0; i < 5; i++) ctx.lineTo(-10 + i * 2.4, i % 2 ? -1 : -7);
+    ctx.lineTo(0, -4);
+    ctx.stroke();
+    ctx.strokeStyle = look.fire > 0 ? color : COPPER;
+    ctx.beginPath();
+    ctx.moveTo(0, -4);
+    ctx.lineTo(0, 4);
+    for (let i = 0; i < 3; i++) ctx.arc(-3 + i * 5, 6, 2.5, Math.PI, 0);
+    ctx.stroke();
+    ctx.fillStyle = color;
+    ctx.font = '700 7px Inter, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('τ', 8, -2);
+  },
+  transformador(ctx, look, color) {
+    coil(ctx, -11, -9, 7, 18, 6);
+    coil(ctx, 4, -9, 7, 18, look.level >= 2 ? 8 : 4);
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1.6;
+    ctx.beginPath();
+    ctx.moveTo(-1.5, -11);
+    ctx.lineTo(-1.5, 11);
+    ctx.moveTo(1.5, -11);
+    ctx.lineTo(1.5, 11);
+    ctx.stroke();
+  },
+};
+
+/* ---------------- Patch 1.1: novas unidades ---------------- */
+
+const DRAW_EXP: Record<'resistor' | 'transistor' | 'retificador' | 'oscilador' | 'ci555' | 'tesla' | 'supercondutor', (ctx: Ctx, look: UnitLook, color: string) => void> = {
+  resistor(ctx, look, color) {
+    // corpo cerâmico com faixas de cor e brilho de aquecimento
+    ctx.strokeStyle = '#a3b2c4';
+    ctx.lineWidth = 1.4;
+    ctx.beginPath();
+    ctx.moveTo(-13, 0);
+    ctx.lineTo(-8, 0);
+    ctx.moveTo(8, 0);
+    ctx.lineTo(13, 0);
+    ctx.stroke();
+    ctx.save();
+    ctx.shadowColor = color;
+    ctx.shadowBlur = 10 * look.fire;
+    ctx.fillStyle = look.fire > 0.2 ? '#7a3a22' : '#e8d3a8';
+    ctx.beginPath();
+    ctx.roundRect(-8, -5, 16, 10, 3);
+    ctx.fill();
+    ctx.restore();
+    const bands = ['#7a4a1c', '#111', '#ff3b3b', color];
+    bands.forEach((c, i) => {
+      ctx.fillStyle = c;
+      ctx.fillRect(-5.5 + i * 3.4, -5, 1.8, 10);
+    });
+    // ondas de calor
+    if (look.fire > 0) {
+      ctx.strokeStyle = color;
+      ctx.globalAlpha = look.fire;
+      ctx.lineWidth = 1.2;
+      for (let k = -1; k <= 1; k++) {
+        ctx.beginPath();
+        ctx.moveTo(k * 5, -8);
+        ctx.quadraticCurveTo(k * 5 + 2, -11, k * 5, -14);
+        ctx.stroke();
+      }
+      ctx.globalAlpha = 1;
+    }
+  },
+  transistor(ctx, look, color) {
+    // símbolo NPN: base, coletor e emissor (seta)
+    ctx.strokeStyle = '#b9c7d8';
+    ctx.lineWidth = 1.6;
+    ctx.beginPath();
+    ctx.arc(0, 0, 10, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(-12, 0);
+    ctx.lineTo(-3, 0);
+    ctx.moveTo(-3, -6);
+    ctx.lineTo(-3, 6);
+    ctx.moveTo(-3, -2);
+    ctx.lineTo(5, -8);
+    ctx.moveTo(-3, 2);
+    ctx.lineTo(5, 8);
+    ctx.stroke();
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.moveTo(5, 8);
+    ctx.lineTo(0.5, 7.5);
+    ctx.lineTo(3, 3.8);
+    ctx.closePath();
+    ctx.fill();
+    // ganho atual (estágios)
+    ctx.fillStyle = '#1e2a3a';
+    ctx.fillRect(-9, 11, 18, 2.5);
+    ctx.fillStyle = look.charge >= 1 ? '#ffffff' : color;
+    ctx.fillRect(-9, 11, 18 * look.charge, 2.5);
+  },
+  retificador(ctx, look, color) {
+    // ponte de 4 diodos em losango
+    ctx.save();
+    ctx.rotate(Math.PI / 4);
+    ctx.strokeStyle = '#3c5a3a';
+    ctx.lineWidth = 1.4;
+    ctx.strokeRect(-7, -7, 14, 14);
+    ctx.restore();
+    ctx.fillStyle = color;
+    const tri = (x: number, y: number, a: number) => {
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate(a);
+      ctx.beginPath();
+      ctx.moveTo(-3, -3);
+      ctx.lineTo(3, 0);
+      ctx.lineTo(-3, 3);
+      ctx.closePath();
+      ctx.fill();
+      ctx.fillRect(3, -3, 1.2, 6);
+      ctx.restore();
+    };
+    tri(-5, -5, Math.PI / 4);
+    tri(5, -5, -Math.PI / 4 + Math.PI / 2);
+    tri(-5, 5, -Math.PI / 4);
+    tri(5, 5, Math.PI / 4 - Math.PI / 2 + Math.PI);
+    ctx.font = '700 7px Inter, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('~', -12, 0);
+    ctx.fillText('=', 12, 0);
+    if (look.fire > 0) {
+      ctx.globalAlpha = look.fire;
+      ctx.fillText('+', 0, -14 - (1 - look.fire) * 4);
+      ctx.globalAlpha = 1;
+    }
+  },
+  oscilador(ctx, look, color) {
+    // senoide viva sobre um tanque LC
+    ctx.strokeStyle = COPPER;
+    ctx.lineWidth = 1.6;
+    ctx.beginPath();
+    for (let i = 0; i < 3; i++) ctx.arc(-6 + i * 5, 7, 2.5, Math.PI, 0);
+    ctx.stroke();
+    ctx.fillStyle = '#a3b2c4';
+    ctx.fillRect(7, 3, 4, 1.6);
+    ctx.fillRect(7, 6.5, 4, 1.6);
+    ctx.save();
+    ctx.shadowColor = color;
+    ctx.shadowBlur = 6 + 8 * look.fire;
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    for (let i = 0; i <= 24; i++) {
+      const x = -11 + (22 * i) / 24;
+      const y = -4 - 5 * Math.sin((i / 24) * Math.PI * 4 + look.t * 6);
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+    ctx.restore();
+  },
+  ci555(ctx, look, color) {
+    // encapsulamento DIP-8
+    ctx.fillStyle = '#1b1f26';
+    ctx.fillRect(-8, -10, 16, 20);
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1.2;
+    ctx.strokeRect(-8, -10, 16, 20);
+    ctx.fillStyle = '#c9ced6';
+    for (let i = 0; i < 4; i++) {
+      ctx.fillRect(-11, -8 + i * 5, 3, 2);
+      ctx.fillRect(8, -8 + i * 5, 3, 2);
+    }
+    ctx.beginPath();
+    ctx.arc(0, -10, 2.5, 0, Math.PI);
+    ctx.fillStyle = '#0b111a';
+    ctx.fill();
+    ctx.fillStyle = color;
+    ctx.font = '800 7px "JetBrains Mono", monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('555', 0, -2);
+    // onda quadrada: nível alto aceso
+    ctx.strokeStyle = look.charge > 0.5 ? '#39d08a' : '#4c5c70';
+    ctx.lineWidth = 1.3;
+    ctx.beginPath();
+    ctx.moveTo(-6, 7);
+    ctx.lineTo(-6, 3);
+    ctx.lineTo(-1, 3);
+    ctx.lineTo(-1, 7);
+    ctx.lineTo(3, 7);
+    ctx.lineTo(3, 3);
+    ctx.lineTo(6, 3);
+    ctx.stroke();
+  },
+  tesla(ctx, look, color) {
+    // secundário alto com toroide no topo
+    ctx.fillStyle = '#5a3a1c';
+    ctx.fillRect(-3.5, -6, 7, 16);
+    ctx.strokeStyle = COPPER;
+    ctx.lineWidth = 0.8;
+    for (let i = 0; i < 8; i++) {
+      ctx.beginPath();
+      ctx.moveTo(-3.5, -5 + i * 2);
+      ctx.lineTo(3.5, -5 + i * 2);
+      ctx.stroke();
+    }
+    ctx.save();
+    ctx.shadowColor = color;
+    ctx.shadowBlur = 8 + 10 * look.fire;
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.ellipse(0, -9, 8, 3, 0, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+    // faíscas
+    ctx.strokeStyle = '#e8ffff';
+    ctx.lineWidth = 1;
+    const n = look.fire > 0.2 ? 4 : 2;
+    for (let k = 0; k < n; k++) {
+      const a = look.t * 9 + k * 2.1;
+      ctx.beginPath();
+      ctx.moveTo(Math.cos(a) * 8, -9 + Math.sin(a) * 3);
+      ctx.lineTo(Math.cos(a) * 14, -12 + Math.sin(a * 1.7) * 5);
+      ctx.stroke();
+    }
+  },
+  supercondutor(ctx, look, color) {
+    // pastilha levitando sobre o ímã (efeito Meissner) e anel de corrente persistente
+    ctx.fillStyle = '#16323a';
+    ctx.fillRect(-9, 5, 18, 5);
+    ctx.strokeStyle = '#2d5c66';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(-9, 5, 18, 5);
+    const lift = 2 + Math.sin(look.t * 2.5) * 1.5;
+    ctx.save();
+    ctx.shadowColor = color;
+    ctx.shadowBlur = 6 + 14 * look.charge;
+    ctx.fillStyle = color;
+    ctx.globalAlpha = 0.85;
+    ctx.beginPath();
+    ctx.ellipse(0, -2 - lift, 9, 3.5, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1.4;
+    ctx.setLineDash([3, 3]);
+    ctx.lineDashOffset = -look.t * 20 * (0.2 + look.charge);
+    ctx.beginPath();
+    ctx.ellipse(0, -2 - lift, 12.5, 6, 0, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    // vapor criogênico
+    ctx.fillStyle = 'rgba(200,250,255,0.35)';
+    for (let k = 0; k < 3; k++) {
+      const p = (look.t * 0.6 + k / 3) % 1;
+      ctx.beginPath();
+      ctx.arc(-8 + k * 8, 4 - p * 8, 1.5 * (1 - p) + 0.5, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  },
+};
+
+/** Marca de raridade (Lendário, Mítico e Secreto ganham um selo brilhante). */
+function rarityMark(ctx: Ctx, id: UnitId, t: number) {
+  const r = RARITIES[UNITS[id].rarity];
+  if (r.rank < 4) return;
+  ctx.save();
+  ctx.translate(13, -13);
+  ctx.rotate(Math.PI / 4 + (r.rank >= 6 ? t : 0));
+  ctx.shadowColor = r.color;
+  ctx.shadowBlur = 6;
+  ctx.fillStyle = r.color;
+  ctx.fillRect(-3, -3, 6, 6);
+  ctx.restore();
+}
+
+export function drawUnit(ctx: Ctx, id: UnitId, x: number, y: number, look: UnitLook, scale = 1): void {
+  const color = UNITS[id].color;
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.scale(scale, scale);
+  base(ctx, color, look);
+  (DRAW[id as keyof typeof DRAW] ?? DRAW_EXP[id as keyof typeof DRAW_EXP])(ctx, look, color);
+  rarityMark(ctx, id, look.t);
+  pips(ctx, look.level, color);
+  if (look.stunned) {
+    ctx.strokeStyle = '#ff5f5f';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(-6, -24);
+    ctx.lineTo(-1, -19);
+    ctx.lineTo(-4, -19);
+    ctx.lineTo(2, -13);
+    ctx.stroke();
+    ctx.fillStyle = 'rgba(8,12,19,0.45)';
+    ctx.beginPath();
+    ctx.arc(0, 0, 16, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
+/* ---------------------------------------------------------------- */
+/* Inimigos                                                          */
+/* ---------------------------------------------------------------- */
+
+function star(ctx: Ctx, r: number, n: number, inner: number, rot: number) {
+  ctx.beginPath();
+  for (let i = 0; i < n * 2; i++) {
+    const rr = i % 2 ? r * inner : r;
+    const a = rot + (i * Math.PI) / n;
+    if (i === 0) ctx.moveTo(Math.cos(a) * rr, Math.sin(a) * rr);
+    else ctx.lineTo(Math.cos(a) * rr, Math.sin(a) * rr);
+  }
+  ctx.closePath();
+}
+
+function poly(ctx: Ctx, r: number, n: number, rot: number) {
+  ctx.beginPath();
+  for (let i = 0; i < n; i++) {
+    const a = rot + (i * 2 * Math.PI) / n;
+    if (i === 0) ctx.moveTo(Math.cos(a) * r, Math.sin(a) * r);
+    else ctx.lineTo(Math.cos(a) * r, Math.sin(a) * r);
+  }
+  ctx.closePath();
+}
+
+export function drawEnemy(ctx: Ctx, e: EnemyInst, t: number, stunned: boolean, slowed: boolean, immune: string | null = null, boosted = false): void {
+  const r = e.def.radius;
+  const c = e.def.color;
+  ctx.save();
+  ctx.translate(e.x, e.y);
+  ctx.shadowColor = c;
+  ctx.shadowBlur = e.def.boss ? 18 : 8;
+  ctx.fillStyle = e.flash > 0 ? '#ffffff' : c;
+  ctx.strokeStyle = c;
+  switch (e.def.id) {
+    case 'curto':
+      star(ctx, r, 6, 0.45, t * 3 + e.uid);
+      ctx.fill();
+      break;
+    case 'surto':
+      ctx.rotate(e.angle);
+      ctx.beginPath();
+      ctx.moveTo(r, 0);
+      ctx.lineTo(-r * 0.7, -r * 0.8);
+      ctx.lineTo(-r * 0.25, 0);
+      ctx.lineTo(-r * 0.7, r * 0.8);
+      ctx.closePath();
+      ctx.fill();
+      ctx.globalAlpha = 0.35;
+      ctx.fillRect(-r * 2.2, -1.5, r * 1.4, 3);
+      break;
+    case 'sobrecarga':
+      poly(ctx, r, 6, t * 0.4);
+      ctx.fillStyle = e.flash > 0 ? '#fff' : '#3a2410';
+      ctx.fill();
+      ctx.lineWidth = 3.5;
+      ctx.stroke();
+      ctx.fillStyle = c;
+      ctx.font = '800 13px Inter, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('!', 0, 1);
+      break;
+    case 'ruido': {
+      ctx.beginPath();
+      for (let i = 0; i <= 24; i++) {
+        const a = (i / 24) * Math.PI * 2;
+        const rr = r * (0.8 + 0.25 * Math.sin(a * 5 + t * 14 + e.uid));
+        if (i === 0) ctx.moveTo(Math.cos(a) * rr, Math.sin(a) * rr);
+        else ctx.lineTo(Math.cos(a) * rr, Math.sin(a) * rr);
+      }
+      ctx.closePath();
+      ctx.globalAlpha = 0.85;
+      ctx.fill();
+      ctx.globalAlpha = 0.06;
+      ctx.beginPath();
+      ctx.arc(0, 0, e.def.behavior.noiseRadius!, 0, Math.PI * 2);
+      ctx.fill();
+      break;
+    }
+    case 'interferencia': {
+      ctx.beginPath();
+      ctx.arc(0, 0, r * 0.6, 0, Math.PI * 2);
+      ctx.fill();
+      const prog = e.tA / (e.def.behavior.pulseEvery ?? 6);
+      ctx.lineWidth = 2;
+      for (let k = 0; k < 2; k++) {
+        ctx.globalAlpha = 0.8 - k * 0.3;
+        ctx.beginPath();
+        ctx.arc(0, 0, r * (0.9 + k * 0.4), -Math.PI / 2, -Math.PI / 2 + prog * Math.PI * 2);
+        ctx.stroke();
+      }
+      break;
+    }
+    case 'isolamento':
+      ctx.rotate(Math.PI / 4);
+      ctx.fillRect(-r * 0.75, -r * 0.75, r * 1.5, r * 1.5);
+      ctx.strokeStyle = INK;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(-r * 0.6, -r * 0.2);
+      ctx.lineTo(-r * 0.1, r * 0.1);
+      ctx.lineTo(r * 0.2, -r * 0.3);
+      ctx.lineTo(r * 0.6, r * 0.3);
+      ctx.stroke();
+      break;
+    case 'instabilidade': {
+      ctx.rotate(t * (e.toggled ? 9 : 2));
+      ctx.lineWidth = 5;
+      ctx.strokeStyle = e.toggled ? '#ff5f5f' : c;
+      ctx.beginPath();
+      ctx.arc(0, 0, r * 0.65, Math.PI * 0.15, Math.PI * 0.85, true);
+      ctx.stroke();
+      ctx.fillStyle = e.toggled ? '#ff5f5f' : c;
+      ctx.fillRect(r * 0.42, -1, 6, 8);
+      ctx.fillRect(-r * 0.42 - 6, -1, 6, 8);
+      break;
+    }
+    case 'arco': {
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(0, 0, r, 0, Math.PI * 2);
+      ctx.fillStyle = '#2a230c';
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle = e.flash > 0 ? '#fff' : c;
+      ctx.beginPath();
+      ctx.moveTo(3, -r * 0.8);
+      ctx.lineTo(-7, 2);
+      ctx.lineTo(0, 2);
+      ctx.lineTo(-4, r * 0.8);
+      ctx.lineTo(8, -4);
+      ctx.lineTo(1, -4);
+      ctx.closePath();
+      ctx.fill();
+      for (let k = 0; k < 3; k++) {
+        const a = t * 4 + (k * Math.PI * 2) / 3;
+        ctx.beginPath();
+        ctx.moveTo(Math.cos(a) * r, Math.sin(a) * r);
+        ctx.lineTo(Math.cos(a + 0.3) * (r + 7), Math.sin(a + 0.3) * (r + 7));
+        ctx.stroke();
+      }
+      break;
+    }
+    case 'saturacao': {
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.arc(0, 0, r, 0, Math.PI * 2);
+      ctx.fillStyle = '#1b1530';
+      ctx.fill();
+      ctx.stroke();
+      // laço de histerese estilizado
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = e.flash > 0 ? '#fff' : '#d4c8ff';
+      ctx.beginPath();
+      ctx.moveTo(-r * 0.7, r * 0.45);
+      ctx.bezierCurveTo(-r * 0.2, r * 0.45, -r * 0.1, -r * 0.45, r * 0.7, -r * 0.45);
+      ctx.moveTo(r * 0.7, -r * 0.45);
+      ctx.bezierCurveTo(r * 0.2, -r * 0.45, r * 0.1, r * 0.45, -r * 0.7, r * 0.45);
+      ctx.stroke();
+      const sat = Math.min(1, e.magTaken / (e.maxHp * 0.9));
+      ctx.strokeStyle = c;
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.arc(0, 0, r + 5, -Math.PI / 2, -Math.PI / 2 + sat * Math.PI * 2);
+      ctx.stroke();
+      break;
+    }
+    case 'cascata': {
+      star(ctx, r, 8, 0.6, t);
+      ctx.fillStyle = e.flash > 0 ? '#fff' : '#3a1414';
+      ctx.fill();
+      ctx.lineWidth = 3;
+      ctx.stroke();
+      ctx.fillStyle = c;
+      for (let k = 0; k < 3; k++) {
+        const a = t * 2.5 + (k * Math.PI * 2) / 3;
+        ctx.save();
+        ctx.translate(Math.cos(a) * (r + 8), Math.sin(a) * (r + 8));
+        star(ctx, 5, 5, 0.45, a);
+        ctx.fill();
+        ctx.restore();
+      }
+      ctx.beginPath();
+      ctx.arc(0, 0, r * 0.35, 0, Math.PI * 2);
+      ctx.fill();
+      break;
+    }
+    case 'colapso': {
+      ctx.beginPath();
+      ctx.arc(0, 0, r * 0.55, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.lineWidth = 3;
+      for (let k = 0; k < 3; k++) {
+        ctx.save();
+        ctx.rotate(t * (k % 2 ? -1 : 1) * (0.8 + k * 0.4));
+        ctx.setLineDash([10 + k * 4, 6]);
+        ctx.globalAlpha = 0.9 - k * 0.2;
+        ctx.beginPath();
+        ctx.arc(0, 0, r * (0.75 + k * 0.22), 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.restore();
+      }
+      break;
+    }
+    /* ---------------- Patch 1.1 ---------------- */
+    case 'franco': {
+      // estrela agressiva com núcleo incandescente
+      star(ctx, r, 8, 0.38, -t * 5 + e.uid);
+      ctx.fill();
+      ctx.fillStyle = '#ffe1a0';
+      ctx.beginPath();
+      ctx.arc(0, 0, r * 0.32, 0, Math.PI * 2);
+      ctx.fill();
+      break;
+    }
+    case 'sobretensao': {
+      // escudo hexagonal pulsante em volta de um raio
+      poly(ctx, r, 6, t * 0.6);
+      ctx.fill();
+      ctx.strokeStyle = '#0b111a';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(-3, -r * 0.6);
+      ctx.lineTo(2, -1);
+      ctx.lineTo(-2, 1);
+      ctx.lineTo(3, r * 0.6);
+      ctx.stroke();
+      break;
+    }
+    case 'emi': {
+      ctx.beginPath();
+      ctx.arc(0, 0, r * 0.55, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.lineWidth = 1.5;
+      for (let k = 1; k <= 3; k++) {
+        const p = (t * 1.2 + k / 3) % 1;
+        ctx.globalAlpha = 1 - p;
+        ctx.beginPath();
+        ctx.arc(0, 0, r * (0.6 + p * 1.4), -0.7, 0.7);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(0, 0, r * (0.6 + p * 1.4), Math.PI - 0.7, Math.PI + 0.7);
+        ctx.stroke();
+      }
+      ctx.globalAlpha = 1;
+      break;
+    }
+    case 'fuga': {
+      // gota com gotículas escapando
+      ctx.beginPath();
+      ctx.moveTo(0, -r);
+      ctx.bezierCurveTo(r, -r * 0.1, r * 0.8, r, 0, r);
+      ctx.bezierCurveTo(-r * 0.8, r, -r, -r * 0.1, 0, -r);
+      ctx.fill();
+      for (let k = 0; k < 3; k++) {
+        const p = (t * 0.8 + k / 3) % 1;
+        ctx.globalAlpha = 1 - p;
+        ctx.beginPath();
+        ctx.arc(Math.cos(k * 2.1) * r * (1 + p), Math.sin(k * 2.1) * r * (1 + p), 1.8, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.globalAlpha = 1;
+      break;
+    }
+    case 'aberto': {
+      // dois terminais com o contato interrompido
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.arc(-r * 0.55, 0, r * 0.35, 0, Math.PI * 2);
+      ctx.arc(r * 0.55, 0, r * 0.35, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.moveTo(-r * 0.55, 0);
+      ctx.lineTo(r * 0.35, e.open ? -r * 0.8 : -r * 0.1);
+      ctx.stroke();
+      break;
+    }
+    case 'transiente': {
+      // pico estreito (spike)
+      ctx.lineWidth = 2.5;
+      ctx.beginPath();
+      ctx.moveTo(-r * 1.3, r * 0.5);
+      ctx.lineTo(-r * 0.3, r * 0.5);
+      ctx.lineTo(0, -r * 1.2);
+      ctx.lineTo(r * 0.3, r * 0.5);
+      ctx.lineTo(r * 1.3, r * 0.5);
+      ctx.stroke();
+      break;
+    }
+    case 'saturado': {
+      // núcleo laminado (E-I) com brilho de saturação
+      ctx.fillRect(-r * 0.8, -r * 0.8, r * 1.6, r * 0.35);
+      ctx.fillRect(-r * 0.8, r * 0.45, r * 1.6, r * 0.35);
+      ctx.fillRect(-r * 0.8, -r * 0.8, r * 0.35, r * 1.6);
+      ctx.fillRect(-r * 0.12, -r * 0.45, r * 0.3, r * 0.9);
+      ctx.fillRect(r * 0.45, -r * 0.8, r * 0.35, r * 1.6);
+      break;
+    }
+    case 'ressonancia': {
+      ctx.beginPath();
+      ctx.arc(0, 0, r * 0.5, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.lineWidth = 2.5;
+      for (let k = 1; k <= 3; k++) {
+        ctx.beginPath();
+        for (let i = 0; i <= 48; i++) {
+          const a = (i / 48) * Math.PI * 2;
+          const rr = r * (0.65 + k * 0.15) + Math.sin(a * (k + 2) + t * (3 + k)) * 3;
+          if (i === 0) ctx.moveTo(Math.cos(a) * rr, Math.sin(a) * rr);
+          else ctx.lineTo(Math.cos(a) * rr, Math.sin(a) * rr);
+        }
+        ctx.globalAlpha = 1 - k * 0.22;
+        ctx.stroke();
+      }
+      ctx.globalAlpha = 1;
+      break;
+    }
+    case 'apagao': {
+      // disco escuro com coroa vermelha intermitente
+      ctx.fillStyle = '#14080b';
+      ctx.beginPath();
+      ctx.arc(0, 0, r * 0.8, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.lineWidth = 4;
+      ctx.globalAlpha = 0.5 + 0.5 * Math.abs(Math.sin(t * 2));
+      ctx.beginPath();
+      ctx.arc(0, 0, r * 0.92, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = e.flash > 0 ? '#ffffff' : c;
+      ctx.font = `800 ${Math.round(r * 0.7)}px Inter, sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('⏻', 0, 1);
+      break;
+    }
+  }
+  ctx.shadowBlur = 0;
+  ctx.globalAlpha = 1;
+  ctx.setLineDash([]);
+  if (e.shield > 0) {
+    ctx.strokeStyle = '#45cfe0';
+    ctx.lineWidth = 2.5;
+    ctx.globalAlpha = 0.85;
+    ctx.beginPath();
+    ctx.arc(0, 0, r + 9, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+  }
+  if (slowed) {
+    ctx.strokeStyle = '#3d9bff';
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([2, 3]);
+    ctx.beginPath();
+    ctx.arc(0, 0, r + 4, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+  if (stunned) {
+    ctx.fillStyle = '#45cfe0';
+    ctx.font = '800 10px Inter, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('⏸', 0, -r - 10);
+  }
+  // 1.1: circuito aberto, aquecimento, proteção alternada e aceleração harmônica
+  if (e.open) {
+    ctx.fillStyle = 'rgba(8,12,19,0.55)';
+    ctx.beginPath();
+    ctx.arc(0, 0, r + 2, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = '#e4ebf3';
+    ctx.lineWidth = 1.2;
+    ctx.setLineDash([2, 3]);
+    ctx.beginPath();
+    ctx.arc(0, 0, r + 6, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+  if (e.heat > 0) {
+    ctx.strokeStyle = '#ff7a59';
+    ctx.lineWidth = 2.5;
+    ctx.shadowColor = '#ff7a59';
+    ctx.shadowBlur = 6;
+    ctx.beginPath();
+    ctx.arc(0, 0, r + 3, Math.PI / 2, Math.PI / 2 + (Math.min(8, e.heat) / 8) * Math.PI * 2);
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+  }
+  if (immune) {
+    ctx.fillStyle = '#ffb347';
+    ctx.font = '800 9px Inter, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(immune, r + 6, -r - 2);
+  }
+  if (boosted) {
+    ctx.strokeStyle = '#c77dff';
+    ctx.lineWidth = 1.5;
+    for (let k = -1; k <= 1; k++) {
+      ctx.beginPath();
+      ctx.moveTo(-r - 4, k * 4);
+      ctx.lineTo(-r - 10, k * 4);
+      ctx.stroke();
+    }
+  }
+  ctx.restore();
+}
