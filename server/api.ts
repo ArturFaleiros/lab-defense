@@ -139,7 +139,7 @@ function newSecret(): string {
 /* Rotas                                                                   */
 /* ====================================================================== */
 
-export type Route = 'session' | 'me' | 'profile' | 'match';
+export type Route = 'session' | 'me' | 'profile' | 'match' | 'status';
 
 const LIMITS = { session: 2_048, profile: 4_096, match: 1_500_000 };
 
@@ -160,6 +160,14 @@ export async function handle(route: Route, req: Request, socketIp?: string): Pro
           const { profile } = await loadProfileFor(q, p.id);
           return json(200, { nick: p.nick, profile });
         });
+      case 'status': {
+        // checagem leve e frequente (só leitura): o jogador ainda está liberado?
+        if (req.method !== 'GET') break;
+        await assertIpAllowed(db, ip);
+        const p = await authenticate(db, req);
+        if (p?.banned) throw bannedError('player', p.ban_reason);
+        return json(200, { ok: true, session: !!p });
+      }
       case 'session':
         if (req.method === 'DELETE') return json(200, { ok: true }, { 'set-cookie': sessionCookie(null) });
         if (req.method !== 'POST') break;

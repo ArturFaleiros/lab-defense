@@ -129,6 +129,22 @@ describe('banimento', () => {
     expect((await call('me', undefined, { cookie: r.cookie, ip: '192.0.2.56' })).status).toBe(200);
   });
 
+  it('checagem leve de status detecta o banimento sem alterar nada', async () => {
+    const { cookie } = await newPlayer('Status01');
+    const before = await raw.query<{ n: string }>(`select count(*)::text as n from labdefense.events`);
+    const ok = await call('status', undefined, { cookie });
+    expect(ok.status).toBe(200);
+    expect(ok.data).toEqual({ ok: true, session: true });
+    expect((await call('status', undefined)).data).toEqual({ ok: true, session: false });
+    const after = await raw.query<{ n: string }>(`select count(*)::text as n from labdefense.events`);
+    expect(after.rows[0].n).toBe(before.rows[0].n);
+    await raw.query(`update labdefense.players set banned = true, ban_reason = 'xingamento' where nick_key = 'status01'`);
+    const ban = await call('status', undefined, { cookie });
+    expect(ban.status).toBe(403);
+    expect(ban.data).toMatchObject({ error: 'banned', banKind: 'player', reason: 'xingamento' });
+    expect((await call('status', {}, { cookie })).status).toBe(405);
+  });
+
   it('banimento sem motivo informado', async () => {
     const { cookie } = await newPlayer('SemMotivo');
     await raw.query(`update labdefense.players set banned = true where nick_key = 'semmotivo'`);

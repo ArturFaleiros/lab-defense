@@ -75,6 +75,7 @@ export interface FinishResponse extends PlayerResponse {
 }
 
 export const api = {
+  status: () => req<{ ok: true; session: boolean }>('status', 'GET', undefined, 8_000),
   me: () => req<PlayerResponse | { nick: null }>('me', 'GET'),
   enter: (nick: string, code?: string) => req<PlayerResponse>('session', 'POST', { nick, code: code || undefined }),
   logout: () => req<{ ok: true }>('session', 'DELETE'),

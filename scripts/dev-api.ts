@@ -10,7 +10,7 @@ import { handle, type Route } from '../server/api';
 process.env.INSECURE_COOKIES = '1';
 const db = await pgliteDb(process.env.PGLITE_DIR || undefined);
 setDb(db);
-const ROUTES: Route[] = ['session', 'me', 'profile', 'match'];
+const ROUTES: Route[] = ['session', 'me', 'profile', 'match', 'status'];
 
 createServer(async (req, res) => {
   const url = new URL(req.url ?? '/', `http://${req.headers.host}`);

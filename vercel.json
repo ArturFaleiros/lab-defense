@@ -15,6 +15,9 @@
     },
     "api/profile.js": {
       "maxDuration": 10
+    },
+    "api/status.js": {
+      "maxDuration": 10
     }
   },
   "headers": [

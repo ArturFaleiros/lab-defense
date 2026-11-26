@@ -147,6 +147,19 @@ class GameSession extends Store<SessionState> {
     }
   }
 
+  /**
+   * Confere no servidor se o jogador continua liberado (banimento aplicado com a página
+   * aberta aparece sem precisar jogar). Não altera o perfil nem a partida em andamento.
+   */
+  async checkStatus(): Promise<void> {
+    if (this.snap.auth !== 'ready') return;
+    try {
+      await api.status();
+    } catch (e) {
+      this.checkBanned(e);
+    }
+  }
+
   /** Se o erro for de banimento, troca para a tela de banido (com o motivo). */
   checkBanned(e: unknown): boolean {
     if (!(e instanceof ApiError) || e.code !== 'banned') return false;

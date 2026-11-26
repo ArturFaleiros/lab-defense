@@ -40,6 +40,21 @@ export function GameShell({ onBack, backLabel, brand = 'EMLab Defense' }: { onBa
     };
   }, []);
 
+  // Confere a cada 10 s (e ao voltar para a aba) se o jogador foi banido
+  const ready = s.auth === 'ready';
+  useEffect(() => {
+    if (!ready) return;
+    const check = () => {
+      if (document.visibilityState === 'visible') void session.checkStatus();
+    };
+    const timer = window.setInterval(check, 10_000);
+    document.addEventListener('visibilitychange', check);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener('visibilitychange', check);
+    };
+  }, [ready]);
+
   const back = () => onBack?.();
 
   if (s.auth !== 'ready') return <NickScreen />;
