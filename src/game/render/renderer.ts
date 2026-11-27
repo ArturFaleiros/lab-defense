@@ -18,6 +18,8 @@ export interface RenderUi {
   ghostReason: string;
   selected: number | null;
   hover: Vec | null;
+  /** §7.2: uids selecionados no Unit Manager (recebem contorno luminoso no mapa) */
+  multi: number[];
 }
 
 const bgCache = new Map<string, HTMLCanvasElement>();
@@ -443,6 +445,27 @@ export class Renderer {
         ctx.beginPath();
         ctx.arc(u.x, u.y, 24, 0, Math.PI * 2);
         ctx.stroke();
+      }
+      // §7.2: contorno luminoso pulsante nas unidades escolhidas no Unit Manager
+      if (ui.multi?.includes(u.uid)) {
+        ctx.save();
+        ctx.strokeStyle = '#f2bf4a';
+        ctx.shadowColor = '#f2bf4a';
+        ctx.shadowBlur = 12;
+        ctx.lineWidth = 2.4;
+        ctx.setLineDash([5, 4]);
+        ctx.lineDashOffset = -t * 18;
+        ctx.beginPath();
+        ctx.arc(u.x, u.y, 27 + Math.sin(t * 4) * 1.5, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.restore();
+      }
+      // §7.4: marca de unidade bloqueada contra venda
+      if (u.locked) {
+        ctx.fillStyle = '#9fb0c6';
+        ctx.font = '700 10px Inter, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('🔒', u.x + 15, u.y - 15);
       }
     }
 

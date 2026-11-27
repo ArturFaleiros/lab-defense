@@ -8,6 +8,7 @@ import type { GameEngine, UnitInst } from '../engine/GameEngine';
 import { capacitorCycle, computeStats, levelsFor, maxLevel, needsBranch, rlSteadyDps, upgradeCost } from '../engine/stats';
 import type { LoadoutEntry, TargetPriority } from '../types';
 import { ClassTags, fmt, Meter, pct, UnitIcon } from './common';
+import { EffectRow } from './effects';
 import { Button, Formula, Segmented } from '../../components/ui';
 
 type Row = [label: string, value: (s: UnitStats) => string];
@@ -208,6 +209,87 @@ export function statRows(entry: LoadoutEntry): Row[] {
         ['Alcance', (s) => fmt(s.range)],
       ];
   }
+}
+
+/**
+ * §6 — Ficha de atributos. Mostra dano-base, dano após melhorias, cada fonte de modificação,
+ * o multiplicador total, o dano final, o DPS real, o intervalo, o alcance e a quantidade de
+ * alvos. Todos os números saem de `eng.breakdown(u)`, que usa as mesmas funções do sistema
+ * de combate — então o valor exibido nunca pode divergir do valor usado para causar dano.
+ * Como o painel re-renderiza a ~10 Hz (e imediatamente após cada comando), a ficha acompanha
+ * buffs entrando e saindo em tempo real.
+ */
+function StatSheet({ eng, u }: { eng: GameEngine; u: UnitInst }) {
+  const b = eng.breakdown(u);
+  const upgradeDelta = b.leveledDamage - b.baseDamage;
+  const modPct = (b.damageMul - 1) * 100;
+  return (
+    <section className="gd-sheet">
+      <h4 className="gd-sheet__h">Atributos em combate</h4>
+      <table className="gd-sheet__t">
+        <tbody>
+          <tr>
+            <th>Dano-base</th>
+            <td className="mono">{fmt(b.baseDamage, 1)}</td>
+          </tr>
+          <tr>
+            <th>Após melhorias e evolução</th>
+            <td className="mono">
+              {fmt(b.leveledDamage, 1)} {upgradeDelta > 0.05 ? <em className="gd-sheet__up">(+{fmt(upgradeDelta, 1)})</em> : null}
+            </td>
+          </tr>
+          <tr className="gd-sheet__sep">
+            <th>Multiplicador total</th>
+            <td className="mono">
+              ×{fmt(b.damageMul, 3)} {Math.abs(modPct) > 0.5 ? <em className={modPct > 0 ? 'gd-sheet__up' : 'gd-sheet__down'}>({modPct > 0 ? '+' : ''}{Math.round(modPct)}%)</em> : null}
+            </td>
+          </tr>
+          <tr className="gd-sheet__final">
+            <th>Dano final</th>
+            <td className="mono">{fmt(b.finalDamage, 1)}</td>
+          </tr>
+          <tr className="gd-sheet__final">
+            <th>DPS real</th>
+            <td className="mono">{fmt(b.dps, 1)}</td>
+          </tr>
+          <tr>
+            <th>Intervalo de ataque</th>
+            <td className="mono">
+              {fmt(b.finalInterval, 2)} s
+              {Math.abs(b.speedMul - 1) > 0.005 ? <em className="gd-sheet__note"> (base {fmt(b.leveledInterval, 2)} s · cadência ×{fmt(b.speedMul, 2)})</em> : null}
+            </td>
+          </tr>
+          <tr>
+            <th>Alcance</th>
+            <td className="mono">
+              {fmt(b.finalRange)}
+              {Math.abs(b.finalRange - b.leveledRange) > 0.5 ? <em className="gd-sheet__note"> (base {fmt(b.leveledRange)})</em> : null}
+            </td>
+          </tr>
+          <tr>
+            <th>Quantidade de alvos</th>
+            <td className="mono">{b.targets}</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h4 className="gd-sheet__h">Fontes dos modificadores</h4>
+      {b.sources.length === 0 ? (
+        <p className="gd-muted">Nenhum efeito ativo: o dano final é igual ao dano após melhorias.</p>
+      ) : (
+        <>
+          <EffectRow sources={b.sources} max={14} />
+          <ul className="gd-sheet__src">
+            {b.sources.map((s, i) => (
+              <li key={`${s.code}-${i}`}>
+                <b>{s.code}</b> {s.label}: <span className="mono">{s.value}</span>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+    </section>
+  );
 }
 
 const PRIORITIES: { id: TargetPriority; label: string }[] = [
@@ -439,6 +521,9 @@ export function UnitPanel({ eng, u, onClose }: { eng: GameEngine; u: UnitInst; o
           <strong style={{ color: trait.color }}>{trait.name}:</strong> {trait.desc} {trait.limitation}
         </p>
       )}
+
+      {/* §6: ficha de atributos — os valores vêm de eng.breakdown(), a mesma fonte do combate */}
+      <StatSheet eng={eng} u={u} />
 
       <table className="gd-stats">
         <tbody>

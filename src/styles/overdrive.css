@@ -1,0 +1,898 @@
+/*
+ * Update 1.2 — “Electrotechnical Overdrive”
+ *
+ * Estilos das interfaces novas, mantendo a identidade visual existente (mesmos tokens de
+ * cor, raio, sombra e tipografia do restante do jogo):
+ *
+ *   §5     indicadores de efeito e tooltips
+ *   §6     ficha de atributos em combate
+ *   §7     Unit Manager
+ *   §8     barra de habilidades
+ *   §11.1  apresentação dos modificadores
+ *   §15.4  garantia e tabela de chances das cápsulas
+ *
+ * Regras seguidas em todo o arquivo: nada depende só de cor (sempre há sigla ou texto),
+ * as animações respeitam `prefers-reduced-motion`, as áreas de toque têm no mínimo 32px e
+ * os painéis rolam em vez de cobrir o mapa em telas pequenas.
+ */
+
+/* ====================================================================== */
+/* §5 — Indicadores de efeito                                             */
+/* ====================================================================== */
+
+.gd-fxrow {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  align-items: center;
+}
+
+.gd-fxchip__wrap {
+  position: relative;
+  display: inline-flex;
+}
+
+.gd-fxchip {
+  --fx: var(--accent);
+  display: inline-flex;
+  align-items: center;
+  gap: 0.22rem;
+  min-height: 20px;
+  padding: 0.08rem 0.4rem;
+  border: 1px solid color-mix(in srgb, var(--fx) 45%, transparent);
+  border-bottom-width: 2px;
+  border-radius: var(--r-sm);
+  background: color-mix(in srgb, var(--fx) 12%, transparent);
+  color: var(--fx);
+  font: 700 0.67rem/1 var(--mono);
+  letter-spacing: 0.04em;
+  cursor: help;
+}
+
+/* o sublinhado é parte da identificação do efeito (§5), não só decoração */
+.gd-fxchip__code {
+  text-decoration: underline;
+  text-decoration-thickness: 1.5px;
+  text-underline-offset: 2px;
+}
+
+.gd-fxchip__t {
+  font-size: 0.6rem;
+  color: var(--text-2);
+}
+
+.gd-fxchip:hover,
+.gd-fxchip:focus-visible {
+  background: color-mix(in srgb, var(--fx) 22%, transparent);
+  outline: none;
+}
+
+/* Tooltip */
+.gd-fxtip {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 6px);
+  z-index: 60;
+  width: min(19rem, 76vw);
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  padding: 0.6rem 0.7rem;
+  border: 1px solid var(--border-3);
+  border-left: 3px solid var(--fx);
+  border-radius: var(--r);
+  background: var(--panel-2);
+  box-shadow: var(--shadow-lg);
+  font: 400 0.76rem/1.42 var(--font);
+  color: var(--text-2);
+  text-align: left;
+  pointer-events: none;
+}
+
+.gd-fxtip__name {
+  color: var(--text);
+  font-size: 0.82rem;
+}
+.gd-fxtip__name em {
+  font-style: normal;
+  font-weight: 400;
+  color: var(--fx);
+  font-size: 0.72rem;
+}
+
+.gd-fxtip__row {
+  display: block;
+}
+.gd-fxtip__row b {
+  display: inline-block;
+  min-width: 7.6rem;
+  color: var(--text-3);
+  font-weight: 600;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.gd-fxtip__desc {
+  color: var(--text);
+}
+.gd-fxtip__tech {
+  color: var(--text-3);
+  font-size: 0.72rem;
+  border-top: 1px solid var(--border);
+  padding-top: 0.3rem;
+}
+.gd-fxtip__formula {
+  color: var(--cyan);
+  font-size: 0.7rem;
+  overflow-wrap: anywhere;
+}
+
+/* perto da borda direita, o tooltip ancora à direita */
+.gd-fxrow > .gd-fxchip__wrap:nth-last-child(-n + 3) .gd-fxtip {
+  left: auto;
+  right: 0;
+}
+
+.gd-fxlegend {
+  list-style: none;
+  margin: 0.4rem 0 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 0.9rem;
+  font-size: 0.74rem;
+  color: var(--text-2);
+}
+.gd-fxlegend li {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+.gd-fxlegend i {
+  width: 9px;
+  height: 9px;
+  border-radius: 3px;
+  display: inline-block;
+}
+
+/* ====================================================================== */
+/* §6 — Ficha de atributos em combate                                     */
+/* ====================================================================== */
+
+.gd-sheet {
+  margin: 0.7rem 0;
+  padding: 0.65rem 0.7rem;
+  border: 1px solid var(--border-2);
+  border-radius: var(--r);
+  background: var(--inset);
+}
+
+.gd-sheet__h {
+  margin: 0 0 0.45rem;
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--text-3);
+}
+.gd-sheet__h + .gd-fxrow,
+.gd-sheet__t + .gd-sheet__h {
+  margin-top: 0.6rem;
+}
+
+.gd-sheet__t {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.8rem;
+}
+.gd-sheet__t th {
+  text-align: left;
+  font-weight: 400;
+  color: var(--text-2);
+  padding: 0.16rem 0;
+}
+.gd-sheet__t td {
+  text-align: right;
+  color: var(--text);
+  padding: 0.16rem 0;
+  white-space: nowrap;
+}
+.gd-sheet__sep th,
+.gd-sheet__sep td {
+  border-top: 1px solid var(--border);
+  padding-top: 0.32rem;
+}
+.gd-sheet__final th {
+  color: var(--text);
+  font-weight: 600;
+}
+.gd-sheet__final td {
+  color: var(--amber);
+  font-weight: 700;
+}
+.gd-sheet__up {
+  font-style: normal;
+  color: var(--green);
+  font-size: 0.74rem;
+}
+.gd-sheet__down {
+  font-style: normal;
+  color: var(--red);
+  font-size: 0.74rem;
+}
+.gd-sheet__note {
+  font-style: normal;
+  color: var(--text-3);
+  font-size: 0.72rem;
+}
+
+.gd-sheet__src {
+  list-style: none;
+  margin: 0.45rem 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.16rem;
+  font-size: 0.75rem;
+  color: var(--text-2);
+}
+.gd-sheet__src b {
+  display: inline-block;
+  min-width: 3.6rem;
+  color: var(--text-3);
+  font: 700 0.68rem var(--mono);
+}
+
+/* ====================================================================== */
+/* §7 — Unit Manager                                                      */
+/* ====================================================================== */
+
+.gd-um {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  min-height: 0;
+  height: 100%;
+}
+
+.gd-um__head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+.gd-um__head > strong {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.92rem;
+  flex: 1;
+  min-width: 8rem;
+}
+.gd-um__count {
+  padding: 0.05rem 0.4rem;
+  border-radius: 999px;
+  background: var(--panel-3);
+  color: var(--text-2);
+  font-size: 0.72rem;
+}
+.gd-um__empty {
+  padding: 1rem 0;
+}
+
+.gd-um__bulk {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.gd-um__list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  overflow-y: auto;
+  min-height: 0;
+  /* a lista rola; o painel nunca cresce por cima do mapa */
+  flex: 1;
+  padding-right: 2px;
+}
+
+.gd-umrow {
+  display: flex;
+  gap: 0.5rem;
+  padding: 0.5rem;
+  border: 1px solid var(--border-2);
+  border-left: 3px solid var(--border-2);
+  border-radius: var(--r);
+  background: var(--panel);
+  transition: border-color 0.15s var(--ease);
+}
+.gd-umrow.is-sel {
+  border-color: var(--amber);
+  border-left-color: var(--amber);
+  background: color-mix(in srgb, var(--amber) 7%, var(--panel));
+}
+.gd-umrow.is-locked {
+  border-left-color: var(--text-3);
+}
+
+.gd-umrow__pick {
+  border: 0;
+  background: none;
+  padding: 0;
+  cursor: pointer;
+  align-self: flex-start;
+  line-height: 0;
+  border-radius: var(--r-sm);
+}
+.gd-umrow__pick:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.gd-umrow__main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.34rem;
+}
+
+.gd-umrow__title {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+.gd-umrow__name {
+  border: 0;
+  background: none;
+  padding: 0;
+  color: var(--text);
+  font: 600 0.88rem var(--font);
+  cursor: pointer;
+  text-decoration: underline dotted color-mix(in srgb, var(--text-3) 70%, transparent);
+  text-underline-offset: 3px;
+}
+.gd-umrow__name:hover {
+  color: var(--accent);
+}
+.gd-umrow__lv {
+  font-size: 0.7rem;
+  color: var(--text-3);
+}
+.gd-umrow__lockmark {
+  color: var(--text-2);
+  line-height: 0;
+}
+.gd-umrow__auto {
+  padding: 0.04rem 0.35rem;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--green) 50%, transparent);
+  background: var(--green-soft);
+  color: var(--green);
+  font: 700 0.62rem var(--mono);
+  letter-spacing: 0.05em;
+}
+
+.gd-umrow__stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.1rem 0.8rem;
+  margin: 0;
+}
+.gd-umrow__stats > div {
+  display: flex;
+  gap: 0.28rem;
+  align-items: baseline;
+}
+.gd-umrow__stats dt {
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-3);
+}
+.gd-umrow__stats dd {
+  margin: 0;
+  font-size: 0.78rem;
+  color: var(--text);
+}
+
+.gd-umrow__fx:empty {
+  display: none;
+}
+
+.gd-umrow__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.gd-umrow__autotoggle,
+.gd-umrow__prio {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  min-height: 32px;
+  padding: 0 0.4rem;
+  border: 1px solid var(--border-2);
+  border-radius: var(--r-sm);
+  background: var(--panel-2);
+  font-size: 0.7rem;
+  color: var(--text-2);
+  cursor: pointer;
+}
+.gd-umrow__prio select {
+  border: 0;
+  background: none;
+  color: var(--text);
+  font: 600 0.74rem var(--mono);
+  cursor: pointer;
+}
+.gd-umrow__prio select:focus-visible {
+  outline: 2px solid var(--accent);
+}
+
+.gd-umrow__lock {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: 1px solid var(--border-2);
+  border-radius: var(--r-sm);
+  background: var(--panel-2);
+  color: var(--text-2);
+  cursor: pointer;
+}
+.gd-umrow__lock:hover {
+  color: var(--text);
+  border-color: var(--border-3);
+}
+
+.gd-umrow__prioline {
+  display: flex;
+}
+.gd-umrow__prioline .seg {
+  font-size: 0.68rem;
+}
+
+.gd-umrow__cd {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  color: var(--amber);
+  font-size: 0.7rem;
+}
+.gd-umrow__cd .gd-meter {
+  flex: 1;
+}
+
+.gd-um__passives {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  overflow-y: auto;
+  min-height: 0;
+  flex: 1;
+}
+.gd-um__passive {
+  padding: 0.55rem 0.6rem;
+  border: 1px solid var(--border-2);
+  border-radius: var(--r);
+  background: var(--panel);
+  font-size: 0.78rem;
+  color: var(--text-2);
+}
+.gd-um__passive h4 {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0 0 0.35rem;
+  font-size: 0.85rem;
+  color: var(--text);
+}
+.gd-um__passive p {
+  margin: 0 0 0.3rem;
+}
+.gd-um__passive em {
+  color: var(--text-3);
+  font-style: normal;
+}
+
+.gd-um__confirm {
+  padding: 0.6rem 0.7rem;
+  border: 1px solid color-mix(in srgb, var(--red) 45%, transparent);
+  border-radius: var(--r);
+  background: var(--red-soft);
+  font-size: 0.8rem;
+  color: var(--text);
+}
+.gd-um__confirm p {
+  margin: 0 0 0.5rem;
+}
+.gd-um__confirm em {
+  font-style: normal;
+  color: var(--text-2);
+}
+.gd-um__confirmrow {
+  display: flex;
+  gap: 0.4rem;
+}
+
+/* ====================================================================== */
+/* §8 — Barra de habilidades (canto inferior esquerdo)                    */
+/* ====================================================================== */
+
+.gd-abar {
+  position: absolute;
+  left: 10px;
+  bottom: 10px;
+  z-index: 20;
+  display: flex;
+  gap: 0.4rem;
+  max-width: calc(100% - 20px);
+  padding: 0.35rem;
+  border: 1px solid var(--border-2);
+  border-radius: var(--r);
+  background: color-mix(in srgb, var(--panel) 88%, transparent);
+  backdrop-filter: blur(6px);
+  /* em telas estreitas rola na horizontal em vez de cobrir a pista */
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+}
+
+.gd-ab {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.15rem;
+  flex: 0 0 auto;
+  width: 54px;
+}
+
+.gd-ab__btn {
+  position: relative;
+  width: 48px;
+  height: 48px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--border-2);
+  border-radius: var(--r);
+  background: var(--panel-2);
+  cursor: pointer;
+  overflow: hidden;
+  transition:
+    border-color 0.15s var(--ease),
+    transform 0.12s var(--ease);
+}
+.gd-ab__btn:disabled {
+  cursor: not-allowed;
+  filter: grayscale(0.55);
+}
+.gd-ab.is-ready .gd-ab__btn {
+  border-color: var(--amber);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--amber) 45%, transparent), 0 0 14px color-mix(in srgb, var(--amber) 32%, transparent);
+  animation: gd-ab-pulse 1.9s ease-in-out infinite;
+}
+.gd-ab.is-active .gd-ab__btn {
+  border-color: var(--cyan);
+  box-shadow: 0 0 0 1px var(--cyan), 0 0 18px color-mix(in srgb, var(--cyan) 45%, transparent);
+}
+.gd-ab__btn:hover:not(:disabled) {
+  transform: translateY(-1px);
+}
+.gd-ab__btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* máscara de recarga: setor cônico que diminui conforme a habilidade volta */
+.gd-ab__mask {
+  position: absolute;
+  inset: 0;
+  background: conic-gradient(rgba(8, 12, 19, 0.78) calc(var(--frac) * 360deg), transparent 0);
+  pointer-events: none;
+}
+
+.gd-ab__t {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: var(--text);
+  font-size: 0.86rem;
+  font-weight: 700;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.8);
+  pointer-events: none;
+}
+
+.gd-ab__spark {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  color: var(--amber);
+  line-height: 0;
+  pointer-events: none;
+}
+
+.gd-ab__key {
+  position: absolute;
+  bottom: 1px;
+  left: 3px;
+  color: var(--text-3);
+  font: 700 0.6rem var(--mono);
+  pointer-events: none;
+}
+
+.gd-ab__name {
+  max-width: 100%;
+  font-size: 0.6rem;
+  line-height: 1.1;
+  text-align: center;
+  color: var(--text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@keyframes gd-ab-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--amber) 45%, transparent), 0 0 10px color-mix(in srgb, var(--amber) 22%, transparent);
+  }
+  50% {
+    box-shadow: 0 0 0 1px var(--amber), 0 0 20px color-mix(in srgb, var(--amber) 50%, transparent);
+  }
+}
+
+/* botão de venda para toque (§7.6) */
+.gd-sellfab {
+  position: absolute;
+  right: 10px;
+  bottom: 10px;
+  z-index: 20;
+}
+
+/* ====================================================================== */
+/* §11.1 — Apresentação dos modificadores                                 */
+/* ====================================================================== */
+
+.gd-mintro {
+  position: absolute;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.8rem;
+  padding: 1.2rem;
+  background: radial-gradient(60% 60% at 50% 45%, rgba(10, 16, 25, 0.93), rgba(8, 12, 19, 0.97));
+  backdrop-filter: blur(3px);
+  overflow-y: auto;
+  transition:
+    transform 1.2s var(--ease),
+    opacity 1.2s var(--ease);
+}
+
+/* ao terminar, o conjunto voa para o canto superior esquerdo, onde a ModBar fica fixa */
+.gd-mintro.is-flying {
+  transform: translate(-32%, -38%) scale(0.32);
+  opacity: 0;
+  pointer-events: none;
+}
+
+.gd-mintro__head {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.3rem;
+  text-align: center;
+}
+.gd-mintro__head strong {
+  font-size: 1.05rem;
+}
+
+.gd-mintro__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  width: min(44rem, 100%);
+}
+
+.gd-mintro__item {
+  --mod: var(--accent);
+  display: flex;
+  gap: 0.6rem;
+  align-items: flex-start;
+  padding: 0.5rem 0.65rem;
+  border: 1px solid var(--border-2);
+  border-left: 3px solid var(--mod);
+  border-radius: var(--r);
+  background: var(--panel);
+  /* cada item entra do centro da tela para a sua posição */
+  opacity: 0;
+  transform: scale(0.6);
+  transition:
+    opacity 0.5s var(--ease),
+    transform 0.5s var(--ease);
+}
+.gd-mintro__item.is-in {
+  opacity: 1;
+  transform: none;
+}
+
+.gd-mintro__code {
+  flex: 0 0 auto;
+  min-width: 3.1rem;
+  padding: 0.22rem 0.3rem;
+  border-radius: var(--r-sm);
+  background: color-mix(in srgb, var(--mod) 16%, transparent);
+  border: 1px solid color-mix(in srgb, var(--mod) 50%, transparent);
+  color: var(--mod);
+  font: 700 0.78rem/1 var(--mono);
+  text-align: center;
+  letter-spacing: 0.03em;
+}
+
+.gd-mintro__body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.18rem;
+  font-size: 0.8rem;
+  color: var(--text-2);
+  min-width: 0;
+}
+.gd-mintro__body strong {
+  color: var(--text);
+  font-size: 0.88rem;
+}
+.gd-mintro__body em {
+  font-style: normal;
+  color: var(--cyan);
+  font-size: 0.72rem;
+}
+.gd-mintro__counter {
+  color: var(--text-3);
+  font-size: 0.74rem;
+}
+
+.gd-mintro__foot {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.3rem;
+  text-align: center;
+}
+
+/* ====================================================================== */
+/* §15.4 — Garantia e tabela de chances das cápsulas                      */
+/* ====================================================================== */
+
+.gd-pity {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid var(--border-2);
+  border-radius: var(--r);
+  background: var(--inset);
+}
+.gd-pity.is-near {
+  border-color: color-mix(in srgb, var(--amber) 55%, transparent);
+  background: var(--amber-soft);
+}
+.gd-pity__top {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 0.5rem;
+  font-size: 0.74rem;
+  color: var(--text-2);
+}
+.gd-pity__top strong {
+  color: var(--text);
+  font-size: 0.86rem;
+}
+.gd-pity__hint {
+  font-size: 0.72rem;
+  color: var(--text-3);
+}
+.gd-pity.is-near .gd-pity__hint {
+  color: var(--amber);
+}
+
+.gd-odds {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.76rem;
+}
+.gd-odds th {
+  width: 3.4rem;
+  text-align: right;
+  padding: 0.16rem 0.5rem 0.16rem 0;
+  color: var(--text-3);
+  font-weight: 600;
+}
+.gd-odds td {
+  text-align: left;
+  padding: 0.16rem 0;
+  color: var(--text-2);
+}
+.gd-odds tr.is-hit th,
+.gd-odds tr.is-hit td {
+  color: var(--amber);
+  font-weight: 700;
+}
+.gd-odds tr.is-hit td::after {
+  content: ' ←';
+  color: var(--amber);
+}
+
+/* ====================================================================== */
+/* Responsivo e movimento reduzido                                        */
+/* ====================================================================== */
+
+@media (max-width: 980px) {
+  .gd-abar {
+    left: 6px;
+    bottom: 6px;
+    padding: 0.25rem;
+  }
+  .gd-ab {
+    width: 46px;
+  }
+  .gd-ab__btn {
+    width: 42px;
+    height: 42px;
+  }
+  .gd-ab__name {
+    display: none;
+  }
+  .gd-mintro__item {
+    flex-direction: column;
+    gap: 0.3rem;
+  }
+  .gd-mintro__code {
+    min-width: 0;
+    align-self: flex-start;
+  }
+  .gd-umrow__stats {
+    gap: 0.1rem 0.6rem;
+  }
+  /* o tooltip vira bloco centrado, para não sair da tela no celular */
+  .gd-fxtip {
+    position: fixed;
+    left: 50%;
+    right: auto;
+    bottom: 12px;
+    transform: translateX(-50%);
+    width: min(22rem, 92vw);
+  }
+  .gd-fxrow > .gd-fxchip__wrap:nth-last-child(-n + 3) .gd-fxtip {
+    right: auto;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .gd-mintro,
+  .gd-mintro__item,
+  .gd-ab__btn {
+    transition: none;
+  }
+  .gd-mintro.is-flying {
+    transform: none;
+  }
+  .gd-ab.is-ready .gd-ab__btn {
+    animation: none;
+  }
+}

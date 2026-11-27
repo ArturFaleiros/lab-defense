@@ -11,7 +11,31 @@ import { UNITS } from '../data/units';
 import type { TargetPriority, UnitId } from '../types';
 import { GameEngine, STEP, type MatchConfig } from './GameEngine';
 
-export const COMMANDS = ['place', 'upgrade', 'sell', 'setPriority', 'useAbility', 'startWave', 'setAutoStart', 'forfeit'] as const;
+/**
+ * Comandos registrados no log. A ORDEM É PARTE DO FORMATO: o log guarda o índice do comando,
+ * então comandos novos entram sempre NO FIM — assim logs antigos continuam válidos.
+ *
+ * 1.2: os comandos do Unit Manager (§7) entram aqui porque alteram o estado da simulação
+ * (bloqueio e melhoria automática mudam o que é comprado e vendido). `sellMany` registra a
+ * ação em massa; as vendas individuais que ela dispara NÃO são registradas de novo, porque
+ * a re-simulação as reproduz a partir do próprio comando.
+ */
+export const COMMANDS = [
+  'place',
+  'upgrade',
+  'sell',
+  'setPriority',
+  'useAbility',
+  'startWave',
+  'setAutoStart',
+  'forfeit',
+  // Patch 1.2 — Unit Manager
+  'setLock',
+  'setAutoUpgrade',
+  'setAutoPriority',
+  'setAutoSkipLocked',
+  'sellMany',
+] as const;
 export type CommandName = (typeof COMMANDS)[number];
 
 /** [passo, índice do comando em COMMANDS, ...argumentos] — formato compacto */
@@ -94,6 +118,25 @@ export function validateLog(raw: unknown): string | null {
       case 'forfeit':
         if (args !== 0) return 'argumentos inesperados';
         break;
+      /* ---------------- 1.2: Unit Manager ---------------- */
+      case 'setLock':
+      case 'setAutoUpgrade':
+        if (args !== 2 || !isInt(a, 1) || typeof b !== 'boolean') return 'comando do Unit Manager inválido';
+        break;
+      case 'setAutoPriority':
+        if (args !== 2 || !isInt(a, 1) || !isInt(b, 1, 6)) return 'prioridade automática inválida';
+        break;
+      case 'setAutoSkipLocked':
+        if (args !== 1 || typeof a !== 'boolean') return 'autoSkipLocked inválido';
+        break;
+      case 'sellMany': {
+        if (args < 1 || args > 2) return 'sellMany inválido';
+        if (a !== 'selected' && a !== 'economy' && a !== 'all') return 'escopo de venda inválido';
+        if (args === 2) {
+          if (!Array.isArray(b) || b.length > 64 || !b.every((x) => isInt(x, 1))) return 'lista de venda inválida';
+        }
+        break;
+      }
     }
   }
   return null;

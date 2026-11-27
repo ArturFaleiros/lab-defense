@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { ArrowLeft, Check, FastForward, Heart, LogOut, Pause, Play, RotateCcw, Skull, Waves, X, Zap } from 'lucide-react';
+import { ArrowLeft, Check, Coins, FastForward, Heart, ListTree, LogOut, Pause, Play, RotateCcw, Skull, Waves, X, Zap } from 'lucide-react';
 import { registerTickable, unregisterTickable } from '../../simulations/engine';
 import { DIFFICULTIES, MODIFIERS } from '../data/difficulty';
 import { ENEMIES } from '../data/enemies';
@@ -12,6 +12,9 @@ import type { EnemyId, TargetPriority, UnitId, Vec } from '../types';
 import { CAPSULE_TABLE, PITY_LIMIT, pityRemaining } from '../progress/capsules';
 import { EnemyIcon, fmt, Meter, Modal, pct, UnitIcon } from './common';
 import { UnitPanel } from './UnitPanel';
+import { AbilityBar } from './AbilityBar';
+import { ModifierIntro } from './ModifierIntro';
+import { UnitManager } from './UnitManager';
 import { Button } from '../../components/ui';
 
 const PRIO_CYCLE: TargetPriority[] = ['primeiro', 'ultimo', 'resistente', 'objetivo'];
@@ -32,7 +35,19 @@ function WavePreview({ eng }: { eng: GameEngine }) {
   );
 }
 
-function Hud({ eng, onExit, onQuit, onRestart }: { eng: GameEngine; onExit: () => void; onQuit: () => void; onRestart: () => void }) {
+function Hud({
+  eng,
+  onExit,
+  onQuit,
+  onRestart,
+  onManager,
+}: {
+  eng: GameEngine;
+  onExit: () => void;
+  onQuit: () => void;
+  onRestart: () => void;
+  onManager: () => void;
+}) {
   const total = Number.isFinite(eng.totalWaves) ? eng.totalWaves : null;
   const waveNum = Math.max(0, eng.wave + 1);
   const next = eng.wave + 1;
@@ -97,6 +112,9 @@ function Hud({ eng, onExit, onQuit, onRestart }: { eng: GameEngine; onExit: () =
         >
           {label}
           {eng.phase === 'prep' && eng.autoStart && eng.wave >= 0 ? ` (${Math.ceil(eng.prepTimer)} s)` : ''}
+        </Button>
+        <Button size="sm" icon={<ListTree />} onClick={onManager} title="Gerenciador de unidades (M)">
+          Unidades
         </Button>
         <Button size="sm" iconOnly variant="ghost" icon={<RotateCcw />} onClick={onRestart} title="Reiniciar partida" />
         <Button size="sm" iconOnly variant="ghost" icon={<LogOut />} onClick={onQuit} title="Abandonar e voltar ao menu" />
@@ -312,10 +330,23 @@ export function MatchScreen({ engine: eng, onExit }: { engine: GameEngine; onExi
   const [selected, setSelected] = useState<number | null>(null);
   const [touchGhost, setTouchGhost] = useState<Vec | null>(null);
   const [confirm, setConfirm] = useState<'quit' | 'restart' | null>(null);
-  const ui = useRef<RenderUi>({ placing: null, ghost: null, ghostOk: false, ghostReason: '', selected: null, hover: null });
+  /* §7: gerenciador de unidades e sua seleção múltipla (destacada no mapa) */
+  const [manager, setManager] = useState(false);
+  const [multi, setMulti] = useState<number[]>([]);
+  /* §11.1: apresentação dos modificadores antes do Difícil e do Impossível */
+  const [intro, setIntro] = useState(() => eng.modifiers.length > 0 && eng.wave < 0 && !!eng.config.difficulty);
+  const ui = useRef<RenderUi>({ placing: null, ghost: null, ghostOk: false, ghostReason: '', selected: null, hover: null, multi: [] });
 
   ui.current.placing = placing;
   ui.current.selected = selected;
+  ui.current.multi = multi;
+
+  // a apresentação pausa a partida enquanto está na tela
+  useEffect(() => {
+    if (!intro) return;
+    eng.setPaused(true);
+    return () => eng.setPaused(false);
+  }, [intro, eng]);
 
   // canvas: ajuste de tamanho
   useLayoutEffect(() => {
@@ -407,20 +438,47 @@ export function MatchScreen({ engine: eng, onExit }: { engine: GameEngine; onExi
     setSelected(hit ? hit.uid : null);
   };
 
+  /** §7.6 — venda pela tecla X (e pelo botão equivalente no celular). */
+  const sellSelected = useCallback(() => {
+    if (selected === null) return; // sem unidade selecionada, X não vende nada
+    const u = eng.unit(selected);
+    if (!u) return;
+    if (u.locked) {
+      session.toast(`${u.def.short} está bloqueada contra venda.`, 'warn');
+      return;
+    }
+    const r = eng.sell(u.uid);
+    if (r.ok) setSelected(null);
+  }, [eng, selected]);
+
   // atalhos da partida
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.ctrlKey || e.metaKey || e.altKey || confirm || capsuleOpen) return;
+      if (e.ctrlKey || e.metaKey || confirm || capsuleOpen || intro) return;
       const tgt = e.target as HTMLElement | null;
-      if (tgt && (tgt.tagName === 'INPUT' || tgt.tagName === 'SELECT' || tgt.tagName === 'TEXTAREA')) return;
+      // §7.6: nunca executar atalhos enquanto o jogador digita em um campo
+      if (tgt && (tgt.tagName === 'INPUT' || tgt.tagName === 'SELECT' || tgt.tagName === 'TEXTAREA' || tgt.isContentEditable)) return;
       const k = e.key.toLowerCase();
+      // §8: Alt + 1–9 ativa a habilidade correspondente na barra
+      if (e.altKey) {
+        if (/^[1-9]$/.test(k)) {
+          const comHab = eng.units.filter((u) => u.def.ability && u.stats.ability);
+          const alvo = comHab[Number(k) - 1];
+          if (alvo) {
+            e.preventDefault();
+            eng.useAbility(alvo.uid);
+          }
+        }
+        return;
+      }
       if (/^[1-5]$/.test(k)) {
         const entry = eng.config.loadout[Number(k) - 1];
         if (entry) pick(entry.id);
         return;
       }
       if (k === 'escape') {
-        if (placing) cancel();
+        if (manager) setManager(false);
+        else if (placing) cancel();
         else setSelected(null);
         return;
       }
@@ -430,15 +488,25 @@ export function MatchScreen({ engine: eng, onExit }: { engine: GameEngine; onExi
         return;
       }
       if (k === 'n') eng.startWave();
+      if (k === 'm') {
+        setManager((v) => !v);
+        return;
+      }
+      if (k === 'x') {
+        e.preventDefault();
+        sellSelected();
+        return;
+      }
       const u = selected !== null ? eng.unit(selected) : undefined;
       if (!u) return;
       if (k === 'u') eng.upgrade(u.uid); // ramos são escolhidos no painel
       if (k === 'q') eng.useAbility(u.uid);
+      if (k === 'l') eng.setLock(u.uid, !u.locked);
       if (k === 't') eng.setPriority(u.uid, PRIO_CYCLE[(PRIO_CYCLE.indexOf(u.priority) + 1) % PRIO_CYCLE.length]);
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [eng, placing, selected, confirm, pick, cancel, capsuleOpen]);
+  }, [eng, placing, selected, confirm, pick, cancel, capsuleOpen, manager, intro, sellSelected]);
 
   const over = eng.isOver;
   const placingDef = placing ? UNITS[placing] : null;
@@ -456,6 +524,7 @@ export function MatchScreen({ engine: eng, onExit }: { engine: GameEngine; onExi
           eng.setPaused(true);
           setConfirm('restart');
         }}
+        onManager={() => setManager((v) => !v)}
       />
       <ModBar eng={eng} />
       <div className="gd-match__body">
@@ -474,6 +543,26 @@ export function MatchScreen({ engine: eng, onExit }: { engine: GameEngine; onExi
           />
           <BossBar eng={eng} />
           <CapsuleOverlay />
+          {/* §8: barra de habilidades no canto inferior esquerdo, fora da pista */}
+          <AbilityBar eng={eng} onFocus={(uid) => setSelected(uid)} />
+          {/* §7.6: equivalente da tecla X para toque */}
+          {selected !== null && (
+            <div className="gd-sellfab">
+              <Button
+                size="sm"
+                variant="danger"
+                icon={<Coins />}
+                disabled={!!eng.unit(selected)?.locked}
+                onClick={sellSelected}
+                title={eng.unit(selected)?.locked ? 'Unidade bloqueada' : 'Vender a unidade selecionada (X)'}
+              >
+                Vender (X)
+              </Button>
+            </div>
+          )}
+          {intro && eng.config.difficulty && (
+            <ModifierIntro modifiers={eng.modifiers} difficulty={eng.config.difficulty} onDone={() => setIntro(false)} />
+          )}
           {eng.paused && !over && !confirm && !capsuleOpen && (
             <button type="button" className="gd-pauseov" onClick={() => eng.setPaused(false)}>
               <Play size={28} />
@@ -506,7 +595,18 @@ export function MatchScreen({ engine: eng, onExit }: { engine: GameEngine; onExi
         </div>
 
         <aside className="gd-side">
-          {sel ? (
+          {manager ? (
+            <UnitManager
+              eng={eng}
+              selected={multi}
+              onSelect={setMulti}
+              onClose={() => setManager(false)}
+              onFocus={(uid) => {
+                setSelected(uid);
+                setManager(false);
+              }}
+            />
+          ) : sel ? (
             <UnitPanel eng={eng} u={sel} onClose={() => setSelected(null)} />
           ) : (
             <div className="gd-sideinfo">
@@ -542,6 +642,7 @@ export function MatchScreen({ engine: eng, onExit }: { engine: GameEngine; onExi
               <h3 className="gd-h3">Atalhos</h3>
               <p className="gd-keys">
                 <kbd>1</kbd>–<kbd>5</kbd> unidades · <kbd>U</kbd> melhorar · <kbd>Q</kbd> habilidade · <kbd>T</kbd> prioridade ·{' '}
+                <kbd>L</kbd> bloquear · <kbd>X</kbd> vender · <kbd>M</kbd> gerenciador · <kbd>Alt</kbd>+<kbd>1</kbd>–<kbd>9</kbd> habilidades ·{' '}
                 <kbd>N</kbd> próxima onda · <kbd>Espaço</kbd> pausa · <kbd>Esc</kbd> cancelar
               </p>
               <h3 className="gd-h3">Desempenho</h3>

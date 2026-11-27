@@ -3,7 +3,7 @@ import { MODIFIERS, type ModifierId } from '../data/difficulty';
 import { ENEMIES, type EnemyDef, type PhaseAction } from '../data/enemies';
 import { MAPS, MAP_H, MAP_W, PATH_WIDTH, UNIT_RADIUS, type MapDef } from '../data/maps';
 import type { BlockedZone, StageDef, WaveDef } from '../data/stages';
-import { SYNERGIES, type SynergyId } from '../data/synergies';
+import { SYNERGIES, SYNERGY_BY_ID, type SynergyId } from '../data/synergies';
 import {
   INDUCTIVE_UNITS,
   MAGNETIC_UNITS,
@@ -18,7 +18,7 @@ import {
 import { isCapsuleMilestone, rollCapsule, type CapsuleRoll } from '../progress/capsules';
 import type { DamageType, Difficulty, EnemyId, LoadoutEntry, TargetPriority, UnitClass, UnitId } from '../types';
 import { PathGeo, rng } from './geometry';
-import { computeStats, needsBranch, placeCost, rlSteadyDps, upgradeCost } from './stats';
+import { computeStats, dpsEstimate, needsBranch, placeCost, rlSteadyDps, upgradeCost } from './stats';
 
 /**
  * Engine da partida — lógica pura, independente da apresentação.
@@ -64,6 +64,12 @@ const ELECTRIC_TYPES = new Set<DamageType>(['descarga', 'comutacao', 'grampeamen
    É a janela em que o jogador reconstrói a defesa. */
 const ANNIHILATION_RECOVERY = 8;
 const ANNIHILATION_WINDOW = 14;
+
+/* §7.5: ritmo e reserva do Auto Upgrade (uma compra por execução, saldo nunca imprevisível) */
+const AUTO_UPGRADE_EVERY = 0.5;
+const AUTO_UPGRADE_RESERVE = 0;
+/** §7.4: comportamentos considerados “suporte econômico” na venda em massa */
+const ECONOMY_BEHAVIORS = new Set(['income', 'rectifier', 'grid']);
 const HEAT_TICK = 0.25;
 const HEAT_DECAY = 1.5;
 const CHAIN_JUMP = 110;
@@ -388,6 +394,61 @@ export interface CommandResult {
   reason?: string;
 }
 
+/* ---------------------------------------------------------------------- */
+/* 1.2 — §5/§6: efeitos e decomposição de atributos                        */
+/* ---------------------------------------------------------------------- */
+
+/** Sigla do efeito (§5). Letras, não só cores: funciona sem depender da cor. */
+export type EffectCode =
+  | 'ATK'
+  | 'SPD'
+  | 'RNG'
+  | 'DOT'
+  | 'STUN'
+  | 'SLOW'
+  | 'BURN'
+  | 'SHOCK'
+  | 'OVERLOAD'
+  | 'RES'
+  | 'VULN'
+  /* siglas dos modificadores (§11) entram como código próprio */
+  | string;
+
+export interface StatSource {
+  code: EffectCode;
+  kind: 'buff' | 'debuff' | 'mod' | 'syn' | 'trait';
+  label: string;
+  /** valor aplicado, já formatado */
+  value: string;
+  /** descrição técnica / origem */
+  detail: string;
+}
+
+export interface StatBreakdown {
+  baseDamage: number;
+  /** dano depois das melhorias, evolução e característica */
+  leveledDamage: number;
+  /** multiplicador total (buffs × debuffs × modificadores) */
+  damageMul: number;
+  /** dano efetivamente usado pelo combate */
+  finalDamage: number;
+  baseInterval: number;
+  leveledInterval: number;
+  speedMul: number;
+  finalInterval: number;
+  baseRange: number;
+  leveledRange: number;
+  finalRange: number;
+  targets: number;
+  /** DPS real, com os atributos efetivos */
+  dps: number;
+  sources: StatSource[];
+  /** atributos efetivos completos (mesma estrutura que o combate lê) */
+  effective: UnitStats;
+}
+
+const fmtPct = (v: number) => `${Math.round(v * 100)}%`;
+
 export interface ModRegion {
   id: ModifierId;
   x: number;
@@ -469,6 +530,9 @@ export class GameEngine extends Store<number> implements Tickable {
   modRegions: ModRegion[] = [];
   /** rejeição de carga do Apagão: sem geração de créditos até este instante */
   incomeHaltUntil = 0;
+  /** §7.5: o Auto Upgrade ignora unidades bloqueadas? */
+  autoSkipLocked = true;
+  private autoT = 0;
 
   private queue: SpawnEntry[] = [];
   private waveTime = 0;
@@ -606,6 +670,8 @@ export class GameEngine extends Store<number> implements Tickable {
     this.computeBuffs();
     this.updateEnemies(dt);
     for (const u of this.units) this.updateUnit(u, dt);
+    // §7.5: a melhoria automática roda depois do combate, em ritmo fixo e determinístico
+    this.runAutoUpgrade(dt);
     this.cleanup();
     this.checkWave();
   }
@@ -955,10 +1021,22 @@ export class GameEngine extends Store<number> implements Tickable {
     return Math.round(u.spent * SELL_REFUND);
   }
 
+  /** Comando público de venda (registrado no log do replay). */
   sell(uid: number): CommandResult {
+    return this.sellInternal(uid);
+  }
+
+  /**
+   * Venda efetiva. `sellMany` usa este caminho interno em vez de `sell`, porque `sell` é
+   * interceptado pelo gravador do replay — se as vendas em massa chamassem o comando
+   * público, cada unidade apareceria duas vezes no log (uma pela ação em massa, outra pela
+   * venda individual).
+   */
+  private sellInternal(uid: number): CommandResult {
     const i = this.units.findIndex((u) => u.uid === uid);
     if (i < 0 || this.isOver) return { ok: false, reason: 'Unidade inexistente' };
     const u = this.units[i];
+    if (u.locked) return { ok: false, reason: 'Unidade bloqueada' };
     const value = this.sellValue(u);
     this.credits += value;
     this.units.splice(i, 1);
@@ -975,6 +1053,109 @@ export class GameEngine extends Store<number> implements Tickable {
     u.priority = p;
     if (u.def.behavior !== 'beam' && u.def.behavior !== 'amplifier') u.target = -1;
     this.bump();
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* 1.2 — §7: Unit Manager                                             */
+  /* ------------------------------------------------------------------ */
+
+  /** §7.4 — bloqueia a unidade contra venda (inclusive as vendas em massa). */
+  setLock(uid: number, locked: boolean): void {
+    const u = this.unit(uid);
+    if (!u) return;
+    u.locked = locked;
+    this.bump();
+  }
+
+  /** §7.5 — liga/desliga a melhoria automática desta unidade. */
+  setAutoUpgrade(uid: number, on: boolean): void {
+    const u = this.unit(uid);
+    if (!u) return;
+    u.autoUpgrade = on;
+    this.bump();
+  }
+
+  /** §7.3 — prioridade de melhoria automática: 1 (maior) a 6 (menor). */
+  setAutoPriority(uid: number, priority: number): void {
+    const u = this.unit(uid);
+    if (!u) return;
+    u.autoPriority = Math.max(1, Math.min(6, Math.round(priority)));
+    this.bump();
+  }
+
+  /** §7.5 — ignora unidades bloqueadas na melhoria automática. */
+  setAutoSkipLocked(on: boolean): void {
+    this.autoSkipLocked = on;
+    this.bump();
+  }
+
+  /**
+   * §7.4 — venda em massa. `scope`:
+   *   'selected' → as unidades de `uids`
+   *   'economy'  → apenas as de suporte econômico (fonte, retificador, trafo de potência)
+   *   'all'      → todas
+   * Unidades BLOQUEADAS nunca são vendidas por ações em massa. Devolve quantas foram
+   * vendidas e o total recebido.
+   */
+  sellMany(scope: 'selected' | 'economy' | 'all', uids: number[] = []): { sold: number; credits: number } {
+    if (this.isOver) return { sold: 0, credits: 0 };
+    const alvo = this.units.filter((u) => {
+      if (u.locked) return false;
+      if (scope === 'selected') return uids.includes(u.uid);
+      if (scope === 'economy') return ECONOMY_BEHAVIORS.has(u.def.behavior);
+      return true;
+    });
+    let credits = 0;
+    let sold = 0;
+    // ordem determinística (uid crescente): o replay no servidor reproduz igual
+    for (const u of [...alvo].sort((a, b) => a.uid - b.uid)) {
+      const v = this.sellValue(u);
+      if (this.sellInternal(u.uid).ok) {
+        credits += v;
+        sold++;
+      }
+    }
+    return { sold, credits };
+  }
+
+  /** Unidades do mesmo tipo (§7.4 — Select All Copies). */
+  copiesOf(uid: number): number[] {
+    const u = this.unit(uid);
+    if (!u) return [];
+    return this.units.filter((o) => o.def.id === u.def.id).map((o) => o.uid);
+  }
+
+  /**
+   * §7.5 — Auto Upgrade. Roda em intervalos fixos de tempo de jogo e compra UMA melhoria por
+   * execução, sempre a de maior prioridade entre as disponíveis.
+   *
+   * Ordem determinística: prioridade (1 antes de 6) → menor custo → menor uid. Como roda
+   * dentro de `update`, o servidor reproduz exatamente as mesmas compras na re-simulação.
+   *
+   * Regras: só gasta o que há de fato (nunca entra em saldo negativo), respeita um reserva
+   * mínima para o jogador não ficar sem créditos de forma imprevisível, pula unidades que
+   * exigem escolha de ramo (essa decisão é do jogador) e, se configurado, pula as
+   * bloqueadas. Uma compra por execução evita esvaziar o saldo de uma vez.
+   */
+  private runAutoUpgrade(dt: number): void {
+    this.autoT += dt;
+    if (this.autoT < AUTO_UPGRADE_EVERY) return;
+    this.autoT = 0;
+    const candidatas: { u: UnitInst; cost: number }[] = [];
+    for (const u of this.units) {
+      if (!u.autoUpgrade) continue;
+      if (this.autoSkipLocked && u.locked) continue;
+      if (needsBranch(u.def, u.level)) continue; // a escolha de ramo é do jogador
+      const cost = upgradeCost(u.entry, u.level);
+      if (cost === null) continue;
+      candidatas.push({ u, cost });
+    }
+    if (!candidatas.length) return;
+    candidatas.sort((a, b) => a.u.autoPriority - b.u.autoPriority || a.cost - b.cost || a.u.uid - b.u.uid);
+    const escolhida = candidatas.find((c) => this.credits - c.cost >= AUTO_UPGRADE_RESERVE);
+    if (!escolhida) return;
+    const r = this.upgrade(escolhida.u.uid);
+    if (r.ok) this.stats.autoUpgrades++;
   }
 
   /** A habilidade ativa pode ser usada agora? (desbloqueada, fora de recarga e unidade ativa) */
@@ -1881,6 +2062,91 @@ export class GameEngine extends Store<number> implements Tickable {
 
   rangeOf(u: UnitInst): number {
     return u.stats.range * (1 + u.buff.range) * u.buff.pRange * (1 - u.buff.emi);
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* 1.2 — §6: fonte única dos atributos exibidos                        */
+  /* ------------------------------------------------------------------ */
+
+  /**
+   * Decomposição completa dos atributos de uma unidade.
+   *
+   * REGRA CENTRAL: os valores finais aqui são calculados pelas MESMAS funções que o combate
+   * usa (`dmgMul`, `speedMul`, `rangeOf`) e pela mesma fórmula de DPS (`dpsEstimate`). Não
+   * existe um segundo cálculo “para a interface” — por construção, o número exibido é o
+   * número usado. Por isso `finalDamage` é literalmente `stats.damage × dmgMul(u)`, a
+   * expressão que aparece em `actBolt`, `actPulse` e nos demais comportamentos.
+   *
+   * A lista de fontes é só descritiva (serve para explicar de onde vem o multiplicador);
+   * ela nunca participa da conta.
+   */
+  breakdown(u: UnitInst): StatBreakdown {
+    const def = u.def;
+    const base = def.base;
+    const leveled = u.stats;
+    const sources: StatSource[] = [];
+
+    // --- origem dos modificadores de dano (descritivo) ---
+    if (u.buff.dmg > 0.0001) sources.push({ code: 'ATK', kind: 'buff', label: 'Auras de dano', value: `+${fmtPct(u.buff.dmg)}`, detail: this.auraSourceNames(u) });
+    if (u.buff.protected && INDUCTIVE_UNITS.includes(def.id)) {
+      sources.push({ code: 'ATK', kind: 'buff', label: 'Diodo de flyback', value: `+${fmtPct(INDUCTIVE_PROTECT_BONUS)}`, detail: 'Componente com bobina protegido por diodo' });
+    }
+    const ov = this.overloadState(u);
+    if (ov === 'boost') sources.push({ code: 'OVERLOAD', kind: 'buff', label: 'Sobrecarga controlada', value: '+40%', detail: 'Característica da unidade' });
+    if (ov === 'cool') sources.push({ code: 'SPD', kind: 'debuff', label: 'Resfriamento', value: '−20%', detail: 'Característica Sobrecarga controlada' });
+    if (def.behavior === 'capacitor' && this.has(u, 'filtroLC')) sources.push({ code: 'ATK', kind: 'syn', label: 'Filtro LC', value: '+10%', detail: 'Indutor próximo' });
+    if (u.buff.brownout > 0) sources.push({ code: 'VULN', kind: 'debuff', label: 'Subtensão', value: `−${fmtPct(u.buff.brownout)}`, detail: 'Chefe por perto' });
+    if (u.buff.noise > 0) sources.push({ code: 'SPD', kind: 'debuff', label: 'Ruído / interferência', value: `−${fmtPct(u.buff.noise)}`, detail: 'Inimigo próximo' });
+    if (u.buff.emi > 0) sources.push({ code: 'RNG', kind: 'debuff', label: 'EMI irradiada', value: `−${fmtPct(u.buff.emi)}`, detail: 'Inimigo próximo' });
+    if (u.buff.speed > 0.0001) sources.push({ code: 'SPD', kind: 'buff', label: 'Auras de cadência', value: `+${fmtPct(u.buff.speed)}`, detail: this.auraSourceNames(u) });
+    if (u.buff.range > 0.0001) sources.push({ code: 'RNG', kind: 'buff', label: 'Auras de alcance', value: `+${fmtPct(u.buff.range)}`, detail: this.auraSourceNames(u) });
+    if (this.time < u.overheatUntil) sources.push({ code: 'BURN', kind: 'debuff', label: 'Superaquecida', value: '−40% de cadência', detail: 'Curto-Circuito Franco' });
+    for (const m of u.buff.mods) {
+      const d = MODIFIERS[m];
+      sources.push({ code: d.code, kind: 'mod', label: d.name, value: d.math, detail: d.tech });
+    }
+    for (const s of u.buff.syn) sources.push({ code: 'ATK', kind: 'syn', label: SYNERGIES.find((x) => x.id === s)!.name, value: 'sinergia ativa', detail: SYNERGY_BY_ID[s].effect });
+
+    // --- valores finais: exatamente os do combate ---
+    const damageMul = this.dmgMul(u);
+    const speedMul = this.speedMul(u);
+    const range = this.rangeOf(u);
+
+    // atributos efetivos: a mesma estrutura que o combate lê, com os modificadores aplicados
+    const effective: UnitStats = {
+      ...leveled,
+      damage: leveled.damage * damageMul,
+      interval: speedMul > 0 ? leveled.interval / speedMul : Infinity,
+      tau: speedMul > 0 ? leveled.tau / speedMul : Infinity,
+      range,
+    };
+
+    return {
+      baseDamage: base.damage,
+      leveledDamage: leveled.damage,
+      damageMul,
+      finalDamage: leveled.damage * damageMul,
+      baseInterval: base.interval,
+      leveledInterval: leveled.interval,
+      speedMul,
+      finalInterval: effective.interval,
+      baseRange: base.range,
+      leveledRange: leveled.range,
+      finalRange: range,
+      targets: leveled.targets,
+      // DPS real: mesma fórmula do comparativo, alimentada com os atributos efetivos
+      dps: dpsEstimate(u.entry, effective),
+      sources,
+      effective,
+    };
+  }
+
+  /** Nomes das unidades que estão aplicando aura/sinergia nesta (para os tooltips). */
+  private auraSourceNames(u: UnitInst): string {
+    const nomes = u.links
+      .map((uid) => this.unit(uid)?.def.short)
+      .filter((x): x is string => !!x);
+    return [...new Set(nomes)].join(', ') || '—';
   }
 
   private updateUnit(u: UnitInst, dt: number): void {

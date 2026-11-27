@@ -10,6 +10,7 @@ import './styles/base.css';
 import './styles/ui.css';
 import './styles/layout.css';
 import './styles/game.css';
+import './styles/overdrive.css';
 import { GameShell } from './game/ui/GameShell';
 
 /** Lab Defense: somente o tower defense, sem o restante do EMLab. */
