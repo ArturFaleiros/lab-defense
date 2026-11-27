@@ -4,7 +4,12 @@ dist
 .env*
 .secrets
 *.tsbuildinfo
-api/*.js
+
+# api/*.js é gerado por scripts/build-api.mjs, mas FICA VERSIONADO de propósito.
+# A Vercel valida os padrões de `functions` do vercel.json contra o diretório api/
+# ANTES de instalar dependências e rodar o build; se os arquivos não existirem no
+# clone, o deploy via Git falha com "unused_function" sem nem começar a construir.
+# O build de produção reescreve esses arquivos, então o que roda é sempre o código atual.
 
 .vercel
 .env*
