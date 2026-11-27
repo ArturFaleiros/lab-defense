@@ -36,7 +36,7 @@ export const SYNERGIES: SynergyDef[] = [
     source: ['diodo'],
     target: ['rele', 'bobina', 'indutor', 'rl', 'oscilador', 'tesla'],
     range: 'aura',
-    effect: 'Componentes com bobina protegidos por um diodo causam +10% de dano.',
+    effect: 'Componentes com bobina protegidos por um diodo causam +15% de dano.',
     why: 'O diodo em antiparalelo dá caminho à corrente da bobina no desligamento e evita o pico de tensão.',
   },
   {
@@ -45,7 +45,7 @@ export const SYNERGIES: SynergyDef[] = [
     source: ['fonte'],
     target: ['capacitor'],
     range: 'aura',
-    effect: 'Capacitores no raio da Fonte DC carregam 25% mais rápido.',
+    effect: 'Capacitores no raio da Fonte DC carregam 10% mais rápido.',
     why: 'Uma fonte capaz de fornecer mais corrente carrega o capacitor mais depressa.',
   },
   {

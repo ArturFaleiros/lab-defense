@@ -177,11 +177,27 @@ describe('partidas verificadas pelo servidor', () => {
     const { cookie } = await newPlayer('Trapaca1');
     const { fin, eng } = await playMatch(cookie, '1-1', { cheat: true });
     expect(eng.credits).toBeGreaterThan(900_000);
-    expect(fin.status).toBe(200);
-    // o servidor ignora os créditos falsos: o resultado é o da re-simulação honesta
-    expect(fin.data.mismatch).toBe(true);
-    const ev = await raw.query(`select 1 from labdefense.events where kind = 'match_mismatch'`);
-    expect(ev.rows.length).toBeGreaterThan(0);
+    // A vitória do cliente foi comprada com créditos falsos. A re-simulação honesta não
+    // consegue reproduzi-la, então o servidor tem dois desfechos legítimos — e em NENHUM
+    // deles a vitória falsa é aceita:
+    //   422 → o replay honesto não encerra no mesmo número de passos (partida recusada);
+    //   200 → o replay honesto encerra com outro resultado (registrado como divergência).
+    // Qual dos dois acontece depende da força das unidades no balanceamento vigente; o que
+    // o teste garante é a propriedade de segurança, não o caminho.
+    if (fin.status === 422) {
+      expect(fin.data.profile).toBeUndefined();
+      const rejected = await raw.query<{ reject_reason: string }>(
+        `select reject_reason from labdefense.matches where status = 'rejected' order by finished_at desc limit 1`,
+      );
+      expect(rejected.rows[0].reject_reason).toBe('not_finished');
+    } else {
+      expect(fin.status).toBe(200);
+      // o servidor ignora os créditos falsos: o resultado é o da re-simulação honesta
+      expect(fin.data.mismatch).toBe(true);
+      expect(fin.data.summary.won).toBe(false);
+      const ev = await raw.query(`select 1 from labdefense.events where kind = 'match_mismatch'`);
+      expect(ev.rows.length).toBeGreaterThan(0);
+    }
   }, 60_000);
 
   it('recusa partida enviada rápido demais (bot/acelerador)', async () => {

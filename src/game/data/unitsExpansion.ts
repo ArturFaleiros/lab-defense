@@ -25,19 +25,20 @@ const RESISTOR: UnitDef = {
   cost: 160,
   limit: 5,
   color: '#ff7a59',
-  base: stats({ damage: 7, interval: 0.9, range: 110, heat: 1, heatMax: 5, heatCoef: 0.9 }),
+  // 1.2: dano-base por golpe +400% (×5); dano térmico máximo +70% (heatCoef ×1,7)
+  base: stats({ damage: 35, interval: 0.9, range: 110, heat: 1, heatMax: 5, heatCoef: 1.53 }),
   levels: [
     {
       cost: 110,
       title: 'Maior potência nominal',
       why: 'Resistores especificados para mais watts suportam maior dissipação sem se danificar.',
-      patch: { damage: 10, heatMax: 6 },
+      patch: { damage: 50, heatMax: 6 },
     },
     {
       cost: 170,
       title: 'Resistor de fio enrolado',
       why: 'Resistores de fio (wirewound) dissipam potências maiores com estabilidade térmica.',
-      patch: { heatCoef: 1.1 },
+      patch: { heatCoef: 1.87 },
     },
     {
       cost: 240,
@@ -57,20 +58,24 @@ const RESISTOR: UnitDef = {
     {
       name: 'Resistor Cerâmico de Potência',
       ec: 110,
-      summary: 'Dano térmico (k·n²) +30%.',
-      why: 'O corpo cerâmico suporta temperaturas maiores e conduz bem o calor para fora.',
+      // 1.2: dano térmico +50% sobre o anterior (1,3 × 1,5 = 1,95); intervalo −10%; 2 alvos
+      summary: 'Dano térmico (k·n²) +95%, intervalo −10% e 2 alvos simultâneos.',
+      why: 'O corpo cerâmico suporta temperaturas maiores e conduz bem o calor para fora, permitindo ciclos mais curtos em dois ramos.',
       apply: (s) => {
-        s.heatCoef *= 1.3;
+        s.heatCoef *= 1.95;
+        s.interval *= 0.9;
+        s.targets = Math.max(s.targets, 2);
       },
     },
     {
       name: 'Banco de Resistores de Frenagem',
       ec: 300,
-      summary: '+1 alvo e aquecimento máximo +1.',
-      why: 'Bancos de frenagem dissipam em calor a energia devolvida por motores durante a frenagem.',
+      // 1.2: alvos adicionais +1 → +3; aquecimento máximo +1 → +2
+      summary: '+3 alvos e aquecimento máximo +2.',
+      why: 'Bancos de frenagem dissipam em calor a energia devolvida por motores durante a frenagem, em vários ramos em paralelo.',
       apply: (s) => {
-        s.targets += 1;
-        s.heatMax += 1;
+        s.targets += 3;
+        s.heatMax += 2;
       },
     },
   ],
@@ -103,13 +108,14 @@ const RETIFICADOR: UnitDef = {
   cost: 220,
   limit: 2,
   color: '#7fe36b',
-  base: stats({ aura: 110, conversion: 2 }),
+  // 1.2: conversão 2–5 → 4–8 EC a cada 100 de dano
+  base: stats({ aura: 110, conversion: 4 }),
   levels: [
     {
       cost: 150,
       title: 'Ponte completa (onda completa)',
       why: 'Na meia onda só um semiciclo é aproveitado (média Vp/π); a ponte de 4 diodos aproveita os dois (média 2Vp/π): o dobro.',
-      patch: { conversion: 4 },
+      patch: { conversion: 6 },
     },
     {
       cost: 220,
@@ -121,7 +127,7 @@ const RETIFICADOR: UnitDef = {
       cost: 320,
       title: 'Diodos de menor queda direta',
       why: 'Cada diodo conduzindo “perde” sua queda direta (≈ 0,7 V no silício); diodos de queda menor desperdiçam menos.',
-      patch: { conversion: 5 },
+      patch: { conversion: 8 },
     },
   ],
   tiers: [
@@ -129,25 +135,27 @@ const RETIFICADOR: UnitDef = {
     {
       name: 'Ponte de Diodos Schottky',
       ec: 120,
-      summary: 'Conversão +20%.',
+      // 1.2: conversão +35% sobre o anterior (1,2 × 1,35 = 1,62)
+      summary: 'Conversão +62%.',
       why: 'Diodos Schottky têm queda direta menor (≈ 0,3 V) e comutam mais rápido.',
       apply: (s) => {
-        s.conversion *= 1.2;
+        s.conversion *= 1.62;
       },
     },
     {
       name: 'Retificador Síncrono Ativo',
       ec: 300,
-      summary: 'Conversão +25% e raio +20.',
+      // 1.2: conversão +50% sobre o anterior (1,25 × 1,5 = 1,875); raio +20 → +40
+      summary: 'Conversão +88% e raio +40.',
       why: 'Transistores controlados substituem os diodos e quase eliminam a perda de condução.',
       apply: (s) => {
-        s.conversion *= 1.25;
-        s.aura += 20;
+        s.conversion *= 1.875;
+        s.aura += 40;
       },
     },
   ],
   special:
-    'Retificação: a cada 100 de dano causado por unidades dentro do raio, gera créditos (meia onda: 2; ponte completa: 4). Filtro: unidades no raio sofrem metade do efeito do Ruído Elétrico. Não ataca.',
+    'Retificação: a cada 100 de dano causado por unidades dentro do raio, gera créditos (meia onda: 4; ponte completa: 6; diodos de baixa queda: 8). Filtro: unidades no raio sofrem metade do efeito do Ruído Elétrico. Não ataca.',
   tech: {
     definition: 'Circuito de diodos que converte corrente alternada em corrente contínua pulsante.',
     principle:
@@ -175,13 +183,15 @@ const TRANSISTOR: UnitDef = {
   cost: 280,
   limit: 4,
   color: '#5ab4ff',
-  base: stats({ damage: 9, interval: 0.55, range: 120, gain: 8, gainStep: 0.25, aura: 90, auraDamage: 0.1 }),
+  // 1.2: dano por golpe +350% (×4,5); ganho por estágio 25% → 30% (valor-base);
+  // dano-base na saturação +40% (`satBonus`)
+  base: stats({ damage: 40.5, interval: 0.55, range: 120, gain: 8, gainStep: 0.3, satBonus: 0.4, aura: 90, auraDamage: 0.1 }),
   levels: [
     {
       cost: 160,
       title: 'Maior corrente de coletor',
       why: 'Transistores com IC máxima maior entregam mais corrente à carga.',
-      patch: { damage: 12 },
+      patch: { damage: 54 },
     },
     {
       cost: 230,
@@ -199,7 +209,7 @@ const TRANSISTOR: UnitDef = {
       cost: 460,
       title: 'Encapsulamento de potência',
       why: 'Encapsulamentos com dissipador (TO-220, TO-3) permitem corrente e frequência de comutação maiores.',
-      patch: { damage: 17, interval: 0.48 },
+      patch: { damage: 76.5, interval: 0.48 },
     },
   ],
   tiers: [
@@ -207,20 +217,23 @@ const TRANSISTOR: UnitDef = {
     {
       name: 'Transistor Darlington',
       ec: 150,
-      summary: 'Cada estágio de ganho rende 40% a mais.',
+      // 1.2: ganho por estágio +60% sobre o anterior (1,4 × 1,6 = 2,24); dano +30%
+      summary: 'Cada estágio de ganho rende 124% a mais e o dano sobe 30%.',
       why: 'Dois transistores em cascata: o ganho total é aproximadamente β₁·β₂.',
       apply: (s) => {
-        s.gainStep *= 1.4;
+        s.gainStep *= 2.24;
+        s.damage *= 1.3;
       },
     },
     {
       name: 'Par Complementar Push-Pull',
       ec: 340,
-      summary: 'Dano +20% e, na saturação, +1 alvo adicional.',
+      // 1.2: dano +80% sobre o anterior (1,2 × 1,8 = 2,16); na saturação +2 alvos adicionais
+      summary: 'Dano +116% e, na saturação, +2 alvos adicionais.',
       why: 'Um NPN e um PNP conduzem alternadamente cada semiciclo, dobrando o aproveitamento do estágio de saída.',
       apply: (s) => {
-        s.damage *= 1.2;
-        s.targets += 1;
+        s.damage *= 2.16;
+        s.targets += 2;
       },
     },
   ],
@@ -232,7 +245,7 @@ const TRANSISTOR: UnitDef = {
     duration: 6,
   },
   special:
-    'Amplificação progressiva: cada golpe consecutivo no mesmo alvo soma um estágio de ganho (+25% de dano cada, até o hFE). Trocar de alvo perde metade dos estágios; 1,5 s sem alvo leva ao corte (zero). Na saturação, o golpe atinge +1 alvo e unidades a até 90 recebem +10% de dano (amplificação do sinal).',
+    'Amplificação progressiva: cada golpe consecutivo no mesmo alvo soma um estágio de ganho (+30% de dano cada, até o hFE). Trocar de alvo perde metade dos estágios; 1,5 s sem alvo leva ao corte (zero). Na saturação, o dano ganha +40% adicional, o golpe atinge alvos extras e unidades a até 90 recebem +10% de dano (amplificação do sinal).',
   tech: {
     definition: 'Dispositivo semicondutor de três terminais (base, coletor, emissor) em que uma pequena corrente controla uma corrente maior.',
     principle:
@@ -345,19 +358,21 @@ const CI555: UnitDef = {
   cost: 400,
   limit: 1,
   color: '#ffd166',
-  base: stats({ damage: 15, interval: 6, duty: 0.45, range: 125, aura: 125, auraSpeed: 0.2, stun: 0.6, charges: 1 }),
+  // 1.2: período 6–4,5 s → 5–3,5 s; ciclo de trabalho 45–60% → 50–70%;
+  // raio 125–145 → 135–155; duração do atordoamento +100% (×2)
+  base: stats({ damage: 15, interval: 5, duty: 0.5, range: 135, aura: 135, auraSpeed: 0.2, stun: 1.2, charges: 1 }),
   levels: [
     {
       cost: 220,
       title: 'Ciclo de trabalho maior',
       why: 'No modo astável, D = (R₁ + R₂)/(R₁ + 2R₂): aumentar R₁ prolonga o nível alto.',
-      patch: { duty: 0.6 },
+      patch: { duty: 0.7 },
     },
     {
       cost: 300,
       title: 'Comparadores mais rápidos',
       why: 'Os comparadores internos (limiares de 1/3 e 2/3 de Vcc) definem com precisão o instante de disparo.',
-      patch: { range: 145, aura: 145, stun: 0.8 },
+      patch: { range: 155, aura: 155, stun: 1.6 },
     },
     {
       cost: 380,
@@ -369,7 +384,7 @@ const CI555: UnitDef = {
       cost: 520,
       title: 'Capacitor de temporização menor',
       why: 'No astável, T ≈ 0,693·(R₁ + 2R₂)·C: um C menor encurta o período.',
-      patch: { interval: 4.5 },
+      patch: { interval: 3.5 },
     },
   ],
   tiers: [
@@ -386,11 +401,12 @@ const CI555: UnitDef = {
     {
       name: 'Temporizador CMOS (7555)',
       ec: 380,
-      summary: 'Interrupção +0,3 s e cadência do nível alto +10%.',
+      // 1.2: interrupção +0,3 s → +0,5 s; cadência do nível alto +10% → +25%
+      summary: 'Interrupção +0,5 s e cadência do nível alto +25%.',
       why: 'A versão CMOS consome menos corrente e comuta com transições mais limpas.',
       apply: (s) => {
-        s.stun += 0.3;
-        s.auraSpeed += 0.1;
+        s.stun += 0.5;
+        s.auraSpeed += 0.25;
       },
     },
   ],
@@ -430,19 +446,20 @@ const TESLA: UnitDef = {
   cost: 600,
   limit: 1,
   color: '#8ff7ff',
-  base: stats({ damage: 95, interval: 1.8, range: 140, chains: 4, chainDecay: 0.8, stun: 0.15 }),
+  // 1.2: intervalo-base −11% (×0,89); dano +300% (×4); saltos 4–6 → 5–7
+  base: stats({ damage: 380, interval: 1.602, range: 140, chains: 5, chainDecay: 0.8, stun: 0.15 }),
   levels: [
     {
       cost: 300,
       title: 'Secundário com mais espiras',
       why: 'A tensão no secundário cresce com a relação de espiras e com a ressonância entre primário e secundário.',
-      patch: { damage: 125 },
+      patch: { damage: 500 },
     },
     {
       cost: 400,
       title: 'Toroide de descarga maior',
       why: 'O toroide no topo acumula carga e controla de onde partem as descargas.',
-      patch: { chains: 6, range: 155 },
+      patch: { chains: 7, range: 155 },
     },
     {
       cost: 520,
@@ -454,7 +471,7 @@ const TESLA: UnitDef = {
       cost: 700,
       title: 'Centelhador rotativo',
       why: 'Um centelhador (spark gap) mais rápido aumenta a taxa de descargas do primário.',
-      patch: { damage: 160, interval: 1.5 },
+      patch: { damage: 640, interval: 1.335 },
     },
   ],
   tiers: [
@@ -471,23 +488,39 @@ const TESLA: UnitDef = {
     {
       name: 'Tesla Ressonante Dupla (DRSSTC)',
       ec: 480,
-      summary: 'Dano +30% e cada salto mantém 88% (antes 80%).',
+      // 1.2: dano +50% sobre o anterior (1,3 × 1,5 = 1,95); retenção por salto 80% → 90%
+      summary: 'Dano +95%, cada salto mantém 90% e libera 2 melhorias exclusivas.',
       why: 'Primário e secundário sintonizados na mesma frequência transferem energia com muito mais eficiência.',
       apply: (s) => {
-        s.damage *= 1.3;
-        s.chainDecay = 0.88;
+        s.damage *= 1.95;
+        s.chainDecay = 0.9;
       },
+      extraLevels: [
+        {
+          cost: 2300,
+          title: 'Capacitor MMC de baixa perda (upgrade I)',
+          why: 'Um banco de capacitores de filme metalizado (MMC) com fator de dissipação baixíssimo devolve ao tanque a energia que antes virava calor: cada ciclo ressonante entrega mais corrente de pico ao primário.',
+          patch: { damage: 1080 },
+        },
+        {
+          cost: 3500,
+          title: 'Ponte H de IGBTs com realimentação de fase (upgrade II)',
+          why: 'Travar a comutação na fase da corrente do secundário (feedback ressonante) mantém o acionamento exatamente na frequência de ressonância: a tensão de saída cresce ciclo após ciclo em vez de se dispersar.',
+          patch: { damage: 1750, chains: 9 },
+        },
+      ],
     },
   ],
   ability: {
     kind: 'hvDischarge',
     name: 'Descarga de alta tensão',
-    desc: 'Um arco com 12 saltos, dano ×2 e interrupção de 0,8 s em cada inimigo atingido.',
+    // 1.2: multiplicador da habilidade 2× → 5×
+    desc: 'Um arco com 12 saltos, dano ×5 e interrupção de 0,8 s em cada inimigo atingido.',
     cooldown: 26,
     duration: 0,
   },
   special:
-    'Arco em cadeia: cada descarga salta para até N inimigos próximos (até 110 do anterior), perdendo 20% por salto, e interrompe brevemente. A cada 5 descargas, um “streamer” ganha +2 saltos e +50% de dano. Limite: 1 por equipe (Mítica).',
+    'Arco em cadeia: cada descarga salta para até N inimigos próximos (até 110 do anterior), perdendo 20% por salto (10% no DRSSTC), e interrompe brevemente. A cada 5 descargas, um “streamer” ganha +2 saltos e +50% de dano. Limite: 1 por equipe (Mítica).',
   tech: {
     definition: 'Transformador ressonante com núcleo de ar que produz tensões altíssimas em alta frequência.',
     principle:
@@ -514,13 +547,14 @@ const SUPERCONDUTOR: UnitDef = {
   cost: 900,
   limit: 1,
   color: '#5ff2e8',
-  base: stats({ damage: 150, interval: 0.25, range: 140, targets: 3, tau: 2.5, meissner: 80, meissnerSlow: 0.35, burst: 14, ability: true }),
+  // 1.2: dano-base +200% (×3); liberação de dano (quench) +20% (×1,2)
+  base: stats({ damage: 450, interval: 0.25, range: 140, targets: 3, tau: 2.5, meissner: 80, meissnerSlow: 0.35, burst: 16.8, ability: true }),
   levels: [
     {
       cost: 450,
       title: 'Fio de nióbio-titânio (NbTi)',
       why: 'NbTi é a liga supercondutora mais usada em ímãs de ressonância magnética.',
-      patch: { damage: 200 },
+      patch: { damage: 600 },
     },
     {
       cost: 600,
@@ -532,7 +566,7 @@ const SUPERCONDUTOR: UnitDef = {
       cost: 800,
       title: 'Corrente crítica elevada',
       why: 'Acima da corrente crítica o material deixa de ser supercondutor; elevá-la permite alimentar mais cargas.',
-      patch: { targets: 4, damage: 240 },
+      patch: { targets: 4, damage: 720 },
     },
   ],
   tiers: [

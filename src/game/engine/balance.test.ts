@@ -76,8 +76,19 @@ describe('balanceamento (bot automático, dificuldade Normal)', () => {
     for (const s of CAMPAIGN) expect([s.id, play(s.id).phase]).toEqual([s.id, 'won']);
   }, 400_000);
 
+  /**
+   * As melhorias em partida precisam continuar sendo decisivas: com no máximo 4 unidades e
+   * sem nenhuma melhoria, estas fases têm de ser perdidas.
+   *
+   * Patch 1.2: a fase 3-3 saiu da lista. O patch elevou muito o DANO-BASE de várias unidades
+   * (diodo +300%, indutor +50%, resistor +400%…), enquanto o Normal subiu de +15% para +50%
+   * de vida — o saldo deixou 3-3 vencível já no nível 0. A proporção base → nível máximo não
+   * mudou (os patches de nível foram escalados pelo mesmo fator), então as melhorias seguem
+   * valendo o mesmo em termos relativos; o que mudou foi o patamar do Normal. As fases abaixo
+   * foram medidas uma a uma e seguem exigindo melhorias.
+   */
   it('sem melhorias, o capítulo 2 em diante não é vencível', () => {
-    for (const id of ['2-2', '3-3', '4-3', 'F-1', '9-3']) expect([id, play(id, false, 4).phase]).toEqual([id, 'lost']);
+    for (const id of ['2-2', '2-3', '4-3', 'F-1', '9-3', '11-3']) expect([id, play(id, false, 4).phase]).toEqual([id, 'lost']);
   }, 120_000);
 
   it('relatório de todas as fases', () => {

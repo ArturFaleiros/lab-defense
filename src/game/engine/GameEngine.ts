@@ -23,13 +23,24 @@ import { computeStats, needsBranch, placeCost, rlSteadyDps, upgradeCost } from '
 
 export const STEP = 1 / 60;
 const CAPACITOR_FIRE_V = 0.9; // energia ∝ v² → 81%
+/** Intervalo de referência entre descargas do capacitor; `stats.recoverMul` o ajusta (1.2). */
 const CAPACITOR_RECOVER = 0.455; // 0,35 s × 1,3 (1.1: intervalo entre descargas +30%)
 const VULN_BONUS = 0.15;
 const SELL_REFUND = 0.6;
+/** 1.2: bônus de dano dos componentes com bobina protegidos por diodo (flyback) */
+const INDUCTIVE_PROTECT_BONUS = 0.15;
+/** 1.2: redução do tempo de carregamento do capacitor alimentado por uma Fonte DC (era 0,25) */
+const POWERED_CHARGE_BONUS = 0.1;
 const HEAT_TICK = 0.25;
 const HEAT_DECAY = 1.5;
 const CHAIN_JUMP = 110;
 const SALVO_GAP = 0.18;
+
+/* 1.2: resistência progressiva do modo Impossível (por onda concluída, com teto) */
+const PROGRESSIVE_CONTROL_STEP = 0.03;
+const PROGRESSIVE_CONTROL_CAP = 0.6;
+const PROGRESSIVE_DR_STEP = 0.02;
+const PROGRESSIVE_DR_CAP = 0.4;
 
 export type Phase = 'prep' | 'wave' | 'won' | 'lost';
 
@@ -127,6 +138,13 @@ export interface EnemyInst {
   y: number;
   angle: number;
   order: number;
+  /**
+   * 1.2: progresso real no percurso — distância percorrida / comprimento total da rota.
+   * É o critério das prioridades PRIMEIRO e ÚLTIMO (nunca a ordem de criação, nem o
+   * instante em que o inimigo entrou no alcance, nem a distância euclidiana).
+   * Mantido sincronizado a cada passo e sempre que `d` muda (salto, recuo, spawn).
+   */
+  routeProgress: number;
   alive: boolean;
   slowUntil: number;
   slowAmt: number;
@@ -275,6 +293,8 @@ export interface MatchConfig {
   rampStart?: number;
   /** modo infinito: cápsulas a cada 5 ondas */
   capsules?: boolean;
+  /** 1.2: modo Impossível — resistência a controle e redução de dano crescentes por onda */
+  progressiveResist?: boolean;
   /** gerador aleatório (cápsulas, modificadores); padrão: semente fixa por partida */
   rand?: () => number;
 }
@@ -834,7 +854,8 @@ export class GameEngine extends Store<number> implements Tickable {
       case 'hvDischarge': {
         const [first] = this.pick(u, this.rangeOf(u), 1);
         if (!first) return { ok: false, reason: 'Nenhum alvo no alcance' };
-        this.chainFrom(u, first, 12, 2 * u.stats.damage * this.dmgMul(u), u.stats.chainDecay, 0.8);
+        // 1.2: multiplicador da habilidade 2× → 5×
+        this.chainFrom(u, first, 12, 5 * u.stats.damage * this.dmgMul(u), u.stats.chainDecay, 0.8);
         break;
       }
       case 'quench': {
@@ -954,6 +975,7 @@ export class GameEngine extends Store<number> implements Tickable {
       y: 0,
       angle: 0,
       order: this.orderSeq++,
+      routeProgress: 0,
       alive: true,
       slowUntil: 0,
       slowAmt: 0,
@@ -994,7 +1016,7 @@ export class GameEngine extends Store<number> implements Tickable {
       tC: 0,
       meissner: 0,
     };
-    this.paths[path].at(d, e);
+    this.moveTo(e, d);
     this.enemies.push(e);
     return e;
   }
@@ -1044,8 +1066,7 @@ export class GameEngine extends Store<number> implements Tickable {
             e.tA = 0;
             const fromX = e.x;
             const fromY = e.y;
-            e.d += b.dashDistance!;
-            this.paths[e.path].at(e.d, e);
+            this.moveTo(e, e.d + b.dashDistance!);
             this.addFx({ kind: 'dash', x: fromX, y: fromY, x2: e.x, y2: e.y, r: 0, dur: 0.5, color: e.def.color });
             this.sfx('zap');
             this.criticalHeat(e.x, e.y, 'Arco Elétrico');
@@ -1143,16 +1164,18 @@ export class GameEngine extends Store<number> implements Tickable {
       e.zoneSlow = 0;
       if (!e.inZone) e.rlTime = Math.max(0, e.rlTime - dt * 2);
       e.inZone = false;
-      e.d += speed * dt;
+      const advanced = e.d + speed * dt;
       e.flash = Math.max(0, e.flash - dt);
 
       const path = this.paths[e.path];
-      if (e.d >= path.length) {
+      if (advanced >= path.length) {
+        e.d = path.length;
+        e.routeProgress = 1;
         e.alive = false;
         this.leak(e);
         continue;
       }
-      path.at(e.d, e);
+      this.moveTo(e, advanced);
 
       if (this.showDamage && e.pend >= 1 && t - e.pendAt >= 0.4) {
         this.addFx({ kind: 'text', x: e.x, y: e.y - e.def.radius - 4, r: 0, dur: 0.7, color: '#e4ebf3', text: String(Math.round(e.pend)) });
@@ -1430,7 +1453,8 @@ export class GameEngine extends Store<number> implements Tickable {
   }
 
   dmgMul(u: UnitInst): number {
-    const inductive = u.buff.protected && INDUCTIVE_UNITS.includes(u.def.id) ? 0.1 : 0;
+    // 1.2: buff de dano em componentes com bobina protegidos por diodo: 10% → 15%
+    const inductive = u.buff.protected && INDUCTIVE_UNITS.includes(u.def.id) ? INDUCTIVE_PROTECT_BONUS : 0;
     const ov = this.overloadState(u) === 'boost' ? 0.4 : 0;
     const lc = u.def.behavior === 'capacitor' && this.has(u, 'filtroLC') ? 0.1 : 0;
     return (1 + u.buff.dmg + inductive + ov + lc) * u.buff.pDmg * (1 - u.buff.brownout);
@@ -1484,8 +1508,9 @@ export class GameEngine extends Store<number> implements Tickable {
 
   private stunEnemy(e: EnemyInst, stun: number): void {
     if (stun <= 0 || e.def.behavior.controlImmune) return;
-    // chefes sofrem metade da interrupção
-    const st = e.def.boss ? stun * 0.5 : stun;
+    // chefes sofrem metade da interrupção; 1.2: resistência progressiva (uma única vez)
+    const st = (e.def.boss ? stun * 0.5 : stun) * (1 - this.controlResist());
+    if (st <= 0) return;
     e.stunUntil = Math.max(e.stunUntil, this.time + st);
     e.vulnUntil = Math.max(e.vulnUntil, this.time + st + 0.6);
     this.stats.stuns++;
@@ -1531,7 +1556,7 @@ export class GameEngine extends Store<number> implements Tickable {
       this.hit(e, dmg, 'magnetico', u);
       if (u.stats.slow > 0) this.slowEnemy(e, u.stats.slow, u.stats.slowDur);
       if (u.stats.knockback > 0 && e.alive && !e.def.behavior.controlImmune) {
-        e.d = Math.max(0, e.d - (e.def.boss ? u.stats.knockback * 0.35 : u.stats.knockback));
+        this.knockback(e, e.def.boss ? u.stats.knockback * 0.35 : u.stats.knockback);
       }
     }
     this.addFx({ kind: 'pulse', x: cx, y: cy, r, dur: 0.45, color: u.def.color });
@@ -1601,7 +1626,8 @@ export class GameEngine extends Store<number> implements Tickable {
   }
 
   private actCapacitor(u: UnitInst, dt: number, sp: number): void {
-    const tau = u.stats.tau * (u.buff.powered ? 0.75 : 1);
+    // 1.2: sinergia com a Fonte DC reduz o carregamento em 10% (antes 25%)
+    const tau = u.stats.tau * (u.buff.powered ? 1 - POWERED_CHARGE_BONUS : 1);
     if (u.stored < u.stats.charges) {
       // Carga RC: v → V com constante τ
       u.ramp += (1 - u.ramp) * (1 - Math.exp((-dt * sp) / tau));
@@ -1622,7 +1648,8 @@ export class GameEngine extends Store<number> implements Tickable {
     }
     u.stored--;
     if (u.stored < u.stats.charges && u.ramp >= CAPACITOR_FIRE_V) u.ramp = 0;
-    u.cd = CAPACITOR_RECOVER;
+    // 1.2: o intervalo entre descargas vem do atributo (base +15%, eletrolítico −10%)
+    u.cd = CAPACITOR_RECOVER * u.stats.recoverMul;
     this.addFx({ kind: 'bolt', x: u.x, y: u.y, x2: target.x, y2: target.y, r: 0, dur: 0.2, color: u.def.color });
     u.aimX = target.x;
     u.aimY = target.y;
@@ -1709,7 +1736,8 @@ export class GameEngine extends Store<number> implements Tickable {
       u.target = primary.uid;
     }
     const sat = this.saturated(u);
-    const dmg = u.stats.damage * (1 + u.stacks * u.stats.gainStep) * this.dmgMul(u);
+    // 1.2: na saturação o dano-base recebe um bônus adicional (satBonus)
+    const dmg = u.stats.damage * (1 + u.stacks * u.stats.gainStep) * (sat ? 1 + u.stats.satBonus : 1) * this.dmgMul(u);
     const hits = sat ? [primary, ...this.pick(u, this.rangeOf(u), u.stats.targets + 2).filter((e) => e !== primary)].slice(0, u.stats.targets + 1) : [primary];
     for (const e of hits) {
       this.hit(e, dmg, 'comutacao', u);
@@ -1784,7 +1812,7 @@ export class GameEngine extends Store<number> implements Tickable {
       } else {
         this.hit(e, base * 0.5, 'magnetico', u);
         this.slowEnemy(e, u.stats.slow, u.stats.slowDur);
-        if (e.alive && !e.def.behavior.controlImmune) e.d = Math.max(0, e.d - (e.def.boss ? u.stats.knockback * 0.35 : u.stats.knockback));
+        if (e.alive && !e.def.behavior.controlImmune) this.knockback(e, e.def.boss ? u.stats.knockback * 0.35 : u.stats.knockback);
       }
     }
     this.addFx({ kind: 'wave', x: u.x, y: u.y, r: range, dur: 0.6, color: positive ? u.def.color : '#45cfe0' });
@@ -1922,18 +1950,21 @@ export class GameEngine extends Store<number> implements Tickable {
       if ((e.x - u.x) ** 2 + (e.y - u.y) ** 2 <= r * r) c.push(e);
     }
     if (c.length <= 1) return c;
+    // 1.2: PRIMEIRO/ÚLTIMO usam o progresso real na rota (distância percorrida / comprimento
+    // total), não a ordem de criação nem o instante de entrada no alcance. O desempate por
+    // uid mantém a seleção determinística (requisito do replay no servidor).
     switch (u.priority) {
       case 'primeiro':
-        c.sort((a, b) => a.order - b.order);
+        c.sort((a, b) => this.routeProgress(b) - this.routeProgress(a) || a.uid - b.uid);
         break;
       case 'ultimo':
-        c.sort((a, b) => b.order - a.order);
+        c.sort((a, b) => this.routeProgress(a) - this.routeProgress(b) || a.uid - b.uid);
         break;
       case 'resistente':
-        c.sort((a, b) => b.hp + b.shield - (a.hp + a.shield));
+        c.sort((a, b) => b.hp + b.shield - (a.hp + a.shield) || a.uid - b.uid);
         break;
       case 'objetivo':
-        c.sort((a, b) => this.remaining(a) - this.remaining(b));
+        c.sort((a, b) => this.remaining(a) - this.remaining(b) || a.uid - b.uid);
         break;
     }
     return c.slice(0, k);
@@ -1943,9 +1974,66 @@ export class GameEngine extends Store<number> implements Tickable {
     return this.paths[e.path].length - e.d;
   }
 
+  /**
+   * 1.2: único ponto que move um inimigo ao longo da rota. Mantém `d`, a posição no mapa e
+   * `routeProgress` sempre coerentes — curvas, segmentos, recuo, saltos e desaceleração
+   * passam todos por aqui, então nenhum deles deixa o progresso desatualizado.
+   */
+  moveTo(e: EnemyInst, d: number): void {
+    const path = this.paths[e.path];
+    e.d = Math.max(0, d);
+    e.routeProgress = path.length > 0 ? Math.min(1, e.d / path.length) : 0;
+    path.at(e.d, e);
+  }
+
+  /** Progresso no percurso em [0, 1] (0 = entrada, 1 = núcleo). */
+  routeProgress(e: EnemyInst): number {
+    const len = this.paths[e.path].length;
+    return len > 0 ? Math.min(1, Math.max(0, e.d / len)) : 0;
+  }
+
+  /**
+   * 1.2: recuo ao longo da rota. O inimigo volta pelo caminho que percorreu (respeitando
+   * curvas e segmentos) e nunca passa do início — não há teletransporte nem posição inválida.
+   * Sofre a resistência progressiva a controle do modo Impossível.
+   */
+  knockback(e: EnemyInst, amount: number): void {
+    const eff = amount * (1 - this.controlResist());
+    if (eff <= 0) return;
+    this.moveTo(e, Math.max(0, e.d - eff));
+  }
+
+  /* ---------------- 1.2: resistência progressiva (modo Impossível) ---------------- */
+
+  /** Ondas concluídas (base da resistência progressiva). */
+  get wavesCleared(): number {
+    return Math.max(0, this.paidThrough + 1);
+  }
+
+  /**
+   * Resistência a controle acumulada: +3 pontos percentuais por onda concluída, limitada a
+   * 60%. Afeta atordoamento, lentidão, recuo e interrupção — aplicada UMA única vez, no
+   * ponto em que cada efeito é criado.
+   */
+  controlResist(): number {
+    if (!this.config.progressiveResist) return 0;
+    return Math.min(PROGRESSIVE_CONTROL_CAP, PROGRESSIVE_CONTROL_STEP * this.wavesCleared);
+  }
+
+  /**
+   * Redução do dano recebido: +2 pontos percentuais por onda concluída, limitada a 40%.
+   * dano recebido = dano calculado × (1 − redução). Aplicada uma única vez, em `hit`.
+   */
+  damageReduction(): number {
+    if (!this.config.progressiveResist) return 0;
+    return Math.min(PROGRESSIVE_DR_CAP, PROGRESSIVE_DR_STEP * this.wavesCleared);
+  }
+
   private slowEnemy(e: EnemyInst, amount: number, dur: number): void {
     if (amount <= 0 || e.def.behavior.controlImmune) return;
-    const a = e.def.boss ? amount * 0.6 : amount;
+    // 1.2: resistência progressiva aplicada uma única vez, ao criar o efeito
+    const a = (e.def.boss ? amount * 0.6 : amount) * (1 - this.controlResist());
+    if (a <= 0) return;
     if (this.time < e.slowUntil && e.slowAmt > a) return;
     e.slowAmt = a;
     e.slowUntil = this.time + dur;
@@ -1971,6 +2059,9 @@ export class GameEngine extends Store<number> implements Tickable {
     if (this.modifiers.includes('instabilidade_circuito')) m *= e.def.boss || e.def.behavior.elite ? 0.8 : 0.92;
     let dmg = amount * m;
     if (!pierce) dmg = Math.max(dmg * 0.3, dmg - e.armor);
+    // 1.2: redução progressiva do modo Impossível — aplicada uma única vez, aqui
+    const dr = this.damageReduction();
+    if (dr > 0) dmg *= 1 - dr;
     if (type === 'magnetico') e.magTaken += dmg;
     if (e.shield > 0) {
       const absorbed = Math.min(e.shield, dmg);

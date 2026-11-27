@@ -18,6 +18,17 @@ export * from './unitTypes';
  *
  * Patch 1.1: valores de relé, fonte, indutor e capacitor rebalanceados (ver comentários
  * “1.1”); novas unidades em `unitsExpansion.ts`.
+ *
+ * Patch 1.2 — convenção de escala dos ajustes percentuais
+ * -------------------------------------------------------
+ * Cada `patch` de nível substitui o atributo por um valor ABSOLUTO. Por isso, quando o
+ * patch 1.2 pede “dano-base +50%”, o fator 1,5 é aplicado ao valor-base E a todos os
+ * patches absolutos do mesmo atributo. Escalar apenas a base deixaria o nível 1 abaixo do
+ * nível 0 (melhorar pioraria a unidade) — o que violaria a integridade matemática exigida.
+ *
+ * Percentuais de evolução (`tiers[].apply`) são multiplicadores sobre o resultado dos
+ * níveis e se acumulam com os valores anteriores à atualização, exceto quando o patch diz
+ * explicitamente “X para Y” ou “substituindo” — nesses casos o valor é trocado.
  */
 
 const BASE_UNITS: Record<'rele' | 'bobina' | 'fonte' | 'indutor' | 'diodo' | 'capacitor' | 'rl' | 'transformador', UnitDef> = {
@@ -117,33 +128,35 @@ const BASE_UNITS: Record<'rele' | 'bobina' | 'fonte' | 'indutor' | 'diodo' | 'ca
     damageType: 'magnetico',
     behavior: 'pulse',
     cost: 300,
-    limit: 5,
+    // 1.2: limite de posicionamento 5 → 4
+    limit: 4,
     color: '#3d9bff',
-    base: stats({ damage: 55, interval: 2.6, range: 125, splash: 50 }),
+    // 1.2: dano-base +50% (×1,5); raio do pulso 50–62 → 65–80; intervalo-base −20% (×0,8)
+    base: stats({ damage: 82.5, interval: 2.08, range: 125, splash: 65 }),
     levels: [
       {
         cost: 190,
         title: 'Mais espiras',
         why: 'Em um solenoide longo B ≈ μ·N·I / l: mais espiras por comprimento produzem campo maior.',
-        patch: { damage: 75 },
+        patch: { damage: 112.5 },
       },
       {
         cost: 260,
         title: 'Núcleo ferromagnético',
         why: 'Um núcleo de alta permeabilidade concentra o fluxo magnético (μ maior).',
-        patch: { splash: 62 },
+        patch: { splash: 80 },
       },
       {
         cost: 360,
         title: 'Pulso prolongado',
         why: 'Adaptação lúdica: o pulso mantém o campo por mais tempo e atrasa os inimigos atingidos.',
-        patch: { damage: 100, slow: 0.3, slowDur: 1.2 },
+        patch: { damage: 150, slow: 0.3, slowDur: 1.2 },
       },
       {
         cost: 500,
         title: 'Corrente de pico ampliada',
         why: 'Condutores de maior seção suportam correntes maiores sem aquecimento excessivo.',
-        patch: { damage: 140, interval: 2.2 },
+        patch: { damage: 210, interval: 1.76 },
       },
     ],
     tiers: [
@@ -151,21 +164,25 @@ const BASE_UNITS: Record<'rele' | 'bobina' | 'fonte' | 'indutor' | 'diodo' | 'ca
       {
         name: 'Bobina de Núcleo Laminado',
         ec: 140,
-        summary: 'Dano +20% e raio do pulso +8.',
-        why: 'Laminar o núcleo reduz as correntes parasitas (de Foucault) e as perdas associadas.',
+        // 1.2: dano +40% sobre o anterior (1,2 × 1,4 = 1,68); raio do pulso +10; alcance +30
+        summary: 'Dano +68%, raio do pulso +10 e alcance +30.',
+        why: 'Laminar o núcleo reduz as correntes parasitas (de Foucault) e as perdas associadas, e o campo útil alcança mais longe.',
         apply: (s) => {
-          s.damage *= 1.2;
-          s.splash += 8;
+          s.damage *= 1.68;
+          s.splash += 10;
+          s.range += 30;
         },
       },
       {
         name: 'Eletroímã de Alta Potência',
         ec: 340,
-        summary: 'Dano +20% e o pulso empurra os inimigos para trás.',
-        why: 'Eletroímãs exercem força sobre materiais ferromagnéticos; no jogo, isso vira um recuo no caminho.',
+        // 1.2: dano +50% sobre o anterior (1,2 × 1,5 = 1,8); recuo 26 → 15; lentidão +30%
+        summary: 'Dano +80%, lentidão 30% mais longa e o pulso empurra os inimigos para trás (recuo 15).',
+        why: 'Eletroímãs exercem força sobre materiais ferromagnéticos; no jogo, isso vira um recuo ao longo do caminho (sem teletransporte).',
         apply: (s) => {
-          s.damage *= 1.2;
-          s.knockback = 26;
+          s.damage *= 1.8;
+          s.knockback = 15;
+          s.slowDur *= 1.3;
         },
       },
     ],
@@ -196,26 +213,26 @@ const BASE_UNITS: Record<'rele' | 'bobina' | 'fonte' | 'indutor' | 'diodo' | 'ca
     cost: 200,
     limit: 3,
     color: '#39d08a',
-    // 1.1: geração +50% e intervalo de 8 s para 6 s (níveis escalados na mesma proporção)
-    base: stats({ income: 27, interval: 6, aura: 110 }),
+    // 1.2: geração-base −20% (×0,8); intervalo 6–5,25 s → 7–6 s; melhorias básicas +20%
+    base: stats({ income: 21.6, interval: 7, aura: 110 }),
     levels: [
       {
-        cost: 140,
+        cost: 168,
         title: 'Regulação de tensão',
         why: 'Uma saída regulada mantém a tensão estável mesmo com variação de carga.',
-        patch: { income: 39 },
+        patch: { income: 31.2 },
       },
       {
-        cost: 210,
+        cost: 252,
         title: 'Maior potência nominal',
         why: 'Transformador e semicondutores dimensionados para mais potência fornecem mais energia ao sistema.',
-        patch: { income: 54 },
+        patch: { income: 43.2 },
       },
       {
-        cost: 300,
+        cost: 360,
         title: 'Filtragem aprimorada',
         why: 'Capacitores e indutores de filtro reduzem a ondulação (ripple) da saída.',
-        patch: { income: 75, interval: 5.25 },
+        patch: { income: 60, interval: 6 },
       },
     ],
     tiers: [
@@ -233,36 +250,37 @@ const BASE_UNITS: Record<'rele' | 'bobina' | 'fonte' | 'indutor' | 'diodo' | 'ca
       {
         name: 'Fonte Chaveada Síncrona',
         ec: 320,
-        // 1.1: +60%, melhorias −15% e três melhorias exclusivas
-        summary: 'Geração +60%, melhorias 15% mais baratas e 3 melhorias exclusivas.',
+        // 1.2: geração +50% sobre o anterior (1,6 × 1,5 = 2,4); desconto das melhorias comuns
+        // 15% → 10%; melhorias exclusivas 25% mais caras (eficiência, estabilidade, conversão)
+        summary: 'Geração +140%, melhorias comuns 10% mais baratas e 3 melhorias exclusivas.',
         why: 'A retificação síncrona substitui diodos por transistores (MOSFETs) e reduz as perdas de condução.',
         apply: (s) => {
-          s.income *= 1.6;
+          s.income *= 2.4;
         },
-        upgradeDiscount: 0.15,
+        upgradeDiscount: 0.1,
         extraLevels: [
           {
-            cost: 360,
-            title: 'MOSFETs de baixa RDS(on)',
-            why: 'Menor resistência de condução nos transistores síncronos reduz a perda I²·R: mais energia chega à saída.',
-            patch: { income: 90 },
+            cost: 450,
+            title: 'MOSFETs de baixa RDS(on) — eficiência energética',
+            why: 'Menor resistência de condução nos transistores síncronos reduz a perda I²·R: mais energia chega à saída em vez de virar calor.',
+            patch: { income: 72 },
           },
           {
-            cost: 460,
-            title: 'Frequência de chaveamento otimizada',
-            why: 'Escolher a frequência que equilibra perdas de comutação e tamanho dos magnéticos encurta o ciclo de entrega.',
-            patch: { interval: 4.5 },
+            cost: 575,
+            title: 'Malha de realimentação rápida — estabilidade de tensão',
+            why: 'Um compensador com margem de fase adequada corrige desvios de carga sem oscilar: a saída se mantém regulada e o ciclo de entrega encurta.',
+            patch: { interval: 5.1, income: 86 },
           },
           {
-            cost: 580,
-            title: 'Correção do fator de potência (PFC)',
-            why: 'Com fator de potência próximo de 1, a fonte aproveita melhor a energia da rede: no jogo, uma reserva é entregue ao fim de cada onda.',
-            patch: { income: 100, waveIncome: 60 },
+            cost: 725,
+            title: 'Correção do fator de potência (PFC) — conversão de potência',
+            why: 'Com fator de potência próximo de 1, a corrente de entrada acompanha a tensão e quase toda a potência aparente vira potência ativa: uma reserva é entregue ao fim de cada onda.',
+            patch: { income: 96, waveIncome: 60 },
           },
         ],
       },
     ],
-    special: 'Alimentação: capacitores dentro do raio da fonte carregam 25% mais rápido.',
+    special: 'Alimentação: capacitores dentro do raio da fonte carregam 10% mais rápido.',
     tech: {
       definition: 'Circuito que converte energia de uma entrada em tensão contínua estável para alimentar outros circuitos.',
       principle:
@@ -287,32 +305,32 @@ const BASE_UNITS: Record<'rele' | 'bobina' | 'fonte' | 'indutor' | 'diodo' | 'ca
     cost: 260,
     limit: 5,
     color: '#a28bff',
-    // 1.1: dano +30% e rapidez de liberação (pico na interrupção) +25%
-    base: stats({ damage: 46.8, interval: 0.5, range: 120, tau: 1.4, burst: 50 }),
+    // 1.2: dano-base +50% (×1,5) e liberação-base +25% (×1,25) — ver nota de escala no topo
+    base: stats({ damage: 70.2, interval: 0.5, range: 120, tau: 1.4, burst: 62.5 }),
     levels: [
       {
         cost: 150,
         title: 'Tensão de acionamento maior',
         why: 'Com V maior, a corrente final V/R e a taxa inicial di/dt = V/L crescem; τ = L/R não muda.',
-        patch: { damage: 65 },
+        patch: { damage: 97.5 },
       },
       {
         cost: 230,
         title: 'Enrolamento de menor resistência',
         why: 'Reduzir R aumenta a corrente final V/R, mas também aumenta τ = L/R: a rampa fica mais lenta.',
-        patch: { damage: 83.2, tau: 1.7 },
+        patch: { damage: 124.8, tau: 1.7 },
       },
       {
         cost: 320,
         title: 'Maior energia armazenada',
         why: 'Com mais corrente, a energia no campo cresce com o quadrado: E = ½·L·I².',
-        patch: { burst: 100, range: 135 },
+        patch: { burst: 125, range: 135 },
       },
       {
         cost: 460,
         title: 'Corrente nominal ampliada',
         why: 'Fio e núcleo dimensionados para corrente maior, abaixo da saturação do núcleo.',
-        patch: { damage: 117 },
+        patch: { damage: 175.5 },
       },
     ],
     tiers: [
@@ -320,26 +338,42 @@ const BASE_UNITS: Record<'rele' | 'bobina' | 'fonte' | 'indutor' | 'diodo' | 'ca
       {
         name: 'Indutor de Alta Indutância',
         ec: 150,
-        // 1.1: dano +40%, rapidez de liberação +50%, rampa 35% mais lenta
-        summary: 'Dano +40%, rapidez de liberação +50%, rampa 35% mais lenta.',
-        why: 'L maior armazena mais energia para a mesma corrente (E = ½LI²) e responde mais devagar (τ = L/R).',
+        // 1.2: dano +30% sobre o anterior (1,4 × 1,3 = 1,82); rampa 40% mais lenta
+        // (substitui os 35% do patch 1.1); 2 alvos simultâneos
+        summary: 'Dano +82%, rapidez de liberação +50%, 2 alvos, rampa 40% mais lenta.',
+        why: 'L maior armazena mais energia para a mesma corrente (E = ½LI²) e responde mais devagar (τ = L/R). Derivações no enrolamento alimentam um segundo feixe.',
         apply: (s) => {
-          s.damage *= 1.4;
+          s.damage *= 1.82;
           s.burst *= 1.5;
-          s.tau *= 1.35;
+          s.tau *= 1.4;
+          s.targets = Math.max(s.targets, 2);
         },
       },
       {
         name: 'Núcleo Magnético Especializado',
         ec: 360,
-        // 1.1: dano +50%, rapidez de liberação +75%, até 3 alvos
-        summary: 'Dano +50%, rapidez de liberação +75% e atinge até 3 inimigos.',
+        // 1.2: dano +70% sobre o anterior (1,5 × 1,7 = 2,55); liberação +100% (1,75 × 2 = 3,5)
+        summary: 'Dano +155%, rapidez de liberação +250% e atinge até 3 inimigos. Libera 2 melhorias exclusivas.',
         why: 'Núcleos de alta permeabilidade e baixas perdas concentram o fluxo com menos aquecimento; derivações no enrolamento alimentam vários feixes.',
         apply: (s) => {
-          s.damage *= 1.5;
-          s.burst *= 1.75;
+          s.damage *= 2.55;
+          s.burst *= 3.5;
           s.targets = 3;
         },
+        extraLevels: [
+          {
+            cost: 1200,
+            title: 'Entreferro calibrado (upgrade I)',
+            why: 'Um entreferro bem dimensionado afasta o núcleo da saturação: a indutância se mantém com correntes muito maiores, elevando V/R e a energia ½LI².',
+            patch: { damage: 320, range: 150 },
+          },
+          {
+            cost: 2150,
+            title: 'Núcleo nanocristalino (upgrade II)',
+            why: 'Ligas nanocristalinas somam permeabilidade altíssima a perdas mínimas em alta frequência: mais fluxo útil por ampère, com menos aquecimento.',
+            patch: { damage: 520, range: 165, burst: 170 },
+          },
+        ],
       },
     ],
     special:
@@ -371,19 +405,20 @@ const BASE_UNITS: Record<'rele' | 'bobina' | 'fonte' | 'indutor' | 'diodo' | 'ca
     cost: 180,
     limit: 4,
     color: '#ff9a47',
-    base: stats({ damage: 9, interval: 0.8, range: 130, aura: 105, protect: true }),
+    // 1.2: dano-base por golpe +300% (×4); raio de proteção 105–130 → 120–150
+    base: stats({ damage: 36, interval: 0.8, range: 130, aura: 120, protect: true }),
     levels: [
       {
         cost: 110,
         title: 'Maior corrente direta nominal',
         why: 'Diodos de maior corrente direta suportam o pico de descarga de bobinas maiores.',
-        patch: { damage: 13 },
+        patch: { damage: 52 },
       },
       {
         cost: 170,
         title: 'Proteção distribuída',
         why: 'Adaptação lúdica: a área protegida pelo diodo aumenta.',
-        patch: { aura: 130 },
+        patch: { aura: 150 },
       },
       {
         cost: 240,
@@ -395,7 +430,7 @@ const BASE_UNITS: Record<'rele' | 'bobina' | 'fonte' | 'indutor' | 'diodo' | 'ca
         cost: 340,
         title: 'Maior tensão reversa suportada',
         why: 'O diodo precisa suportar a tensão reversa do circuito com margem de segurança.',
-        patch: { damage: 25 },
+        patch: { damage: 100 },
       },
     ],
     tiers: [
@@ -412,16 +447,17 @@ const BASE_UNITS: Record<'rele' | 'bobina' | 'fonte' | 'indutor' | 'diodo' | 'ca
       {
         name: 'Supressor de Transientes (TVS)',
         ec: 300,
-        summary: 'Dano +40% e unidades protegidas recebem +8% de dano.',
+        // 1.2: dano +100% (substitui os +40% anteriores); buff das protegidas 8% → 15%
+        summary: 'Dano +100% e unidades protegidas recebem +15% de dano.',
         why: 'Diodos TVS são projetados para grampear surtos de tensão e proteger o restante do circuito.',
         apply: (s) => {
-          s.damage *= 1.4;
-          s.auraDamage += 0.08;
+          s.damage *= 2;
+          s.auraDamage += 0.15;
         },
       },
     ],
     special:
-      'Proteção: unidades no raio ficam imunes à Interferência e ao Ruído e sofrem menos com o Colapso. Componentes com bobina protegidos (relé, bobina, indutor, RL) recebem +10% de dano. Grampeamento: dano dobrado contra Surtos de Tensão.',
+      'Proteção: unidades no raio ficam imunes à Interferência e ao Ruído e sofrem menos com o Colapso. Componentes com bobina protegidos (relé, bobina, indutor, RL) recebem +15% de dano. Grampeamento: dano dobrado contra Surtos de Tensão.',
     tech: {
       definition: 'Semicondutor que conduz preferencialmente em um sentido (do anodo para o catodo).',
       principle:
@@ -445,16 +481,18 @@ const BASE_UNITS: Record<'rele' | 'bobina' | 'fonte' | 'indutor' | 'diodo' | 'ca
     damageType: 'descarga',
     behavior: 'capacitor',
     cost: 280,
-    limit: 4,
+    // 1.2: limite de posicionamento 4 → 3
+    limit: 3,
     color: '#f2bf4a',
-    // 1.1: intervalo entre descargas +30% (τ de recarga ×1,3) e dano +15%
-    base: stats({ damage: 92, tau: 1.82, range: 115, splash: 70, slow: 0.35, slowDur: 1.5 }),
+    // 1.2: dano +10% (×1,1); constante de carga 30% mais lenta (τ ×1,3);
+    // intervalo entre descargas 15% mais lento (`recoverMul`); alcance 115 → 130
+    base: stats({ damage: 101.2, tau: 2.366, range: 130, splash: 70, slow: 0.35, slowDur: 1.5, recoverMul: 1.15 }),
     levels: [
       {
         cost: 190,
         title: 'Maior capacitância',
         why: 'A energia armazenada no campo elétrico é E = ½·C·V²: C maior armazena mais energia.',
-        patch: { damage: 120.75 },
+        patch: { damage: 132.825 },
       },
       {
         cost: 270,
@@ -466,13 +504,13 @@ const BASE_UNITS: Record<'rele' | 'bobina' | 'fonte' | 'indutor' | 'diodo' | 'ca
         cost: 360,
         title: 'Menor resistência série (ESR)',
         why: 'Na carga por um resistor, τ = R·C: reduzir a resistência série acelera a recarga.',
-        patch: { splash: 85, tau: 1.495 },
+        patch: { splash: 85, tau: 1.9435 },
       },
       {
         cost: 500,
         title: 'Maior tensão nominal',
         why: 'Como a energia cresce com V², suportar tensão maior aumenta muito a energia disponível.',
-        patch: { damage: 172.5 },
+        patch: { damage: 189.75 },
       },
     ],
     tiers: [
@@ -480,24 +518,27 @@ const BASE_UNITS: Record<'rele' | 'bobina' | 'fonte' | 'indutor' | 'diodo' | 'ca
       {
         name: 'Capacitor Eletrolítico',
         ec: 140,
-        // 1.1: +40% (antes +25%)
-        summary: 'Dano +40%.',
-        why: 'Capacitores eletrolíticos oferecem alta capacitância por volume (e têm polaridade).',
+        // 1.2: dano +50% sobre o anterior (1,4 × 1,5 = 2,1); carga 10% mais rápida;
+        // intervalo entre descargas 10% mais rápido
+        summary: 'Dano +110%, constante de carga 10% mais rápida e descargas 10% mais frequentes.',
+        why: 'Capacitores eletrolíticos oferecem alta capacitância por volume (e têm polaridade); a ESR menor acelera carga e descarga.',
         apply: (s) => {
-          s.damage *= 1.4;
+          s.damage *= 2.1;
+          s.tau *= 0.9;
+          s.recoverMul *= 0.9;
         },
       },
       {
         name: 'Banco de Capacitores',
         ec: 340,
-        // 1.1: dano +30% e duas descargas consecutivas extras (dano real)
-        summary: 'Dano +30%, armazena 2 cargas e cada disparo vem seguido de 2 descargas consecutivas (55% cada).',
+        // 1.2: dano +50% sobre o anterior (1,3 × 1,5 = 1,95); descargas secundárias 55% → 45%
+        summary: 'Dano +95%, armazena 2 cargas e cada disparo vem seguido de 2 descargas consecutivas (45% cada).',
         why: 'Capacitores em paralelo somam capacitâncias (C_eq = C₁ + C₂): cada célula do banco descarrega em sequência sobre a mesma carga.',
         apply: (s) => {
-          s.damage *= 1.3;
+          s.damage *= 1.95;
           s.charges = 2;
           s.salvo = 2;
-          s.salvoMul = 0.55;
+          s.salvoMul = 0.45;
         },
       },
     ],
@@ -505,7 +546,8 @@ const BASE_UNITS: Record<'rele' | 'bobina' | 'fonte' | 'indutor' | 'diodo' | 'ca
       kind: 'discharge',
       name: 'Descarga Total',
       desc: 'Fecha a chave de carga rápida: completa a carga instantaneamente e libera toda a energia armazenada (cargas + carga atual) em todos os inimigos no alcance, com dano ×1,6.',
-      cooldown: 22,
+      // 1.2: recarga da habilidade 22 s → 30 s
+      cooldown: 30,
       duration: 0,
     },
     special:

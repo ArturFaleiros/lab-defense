@@ -78,6 +78,11 @@ export interface UnitStats {
   resonance: number;
   /** oscilador VCO: redução do período por inimigo no alcance */
   vco: number;
+  /* ---------- Patch 1.2 ---------- */
+  /** transistor/amp. operacional: dano extra enquanto saturado (0,4 = +40%) */
+  satBonus: number;
+  /** capacitor: multiplicador do intervalo entre descargas (1 = padrão; 0,9 = 10% mais rápido) */
+  recoverMul: number;
 }
 
 export const ZERO_STATS: UnitStats = {
@@ -118,6 +123,9 @@ export const ZERO_STATS: UnitStats = {
   meissnerSlow: 0,
   resonance: 0,
   vco: 0,
+  satBonus: 0,
+  // 1.2: multiplicadores partem de 1 (neutro), não de 0
+  recoverMul: 1,
 };
 
 export const stats = (p: Partial<UnitStats>): UnitStats => ({ ...ZERO_STATS, ...p });

@@ -91,8 +91,8 @@ export function dpsEstimate(entry: LoadoutEntry, s: UnitStats): number {
     case 'capacitor':
       return (s.damage * (1 + s.salvo * s.salvoMul)) / capacitorCycle(s);
     case 'amplifier':
-      // no regime saturado
-      return s.interval > 0 ? (s.damage * (1 + s.gain * s.gainStep)) / s.interval : 0;
+      // no regime saturado (inclui o bônus de saturação do patch 1.2)
+      return s.interval > 0 ? (s.damage * (1 + s.gain * s.gainStep) * (1 + s.satBonus) * (s.targets + 1)) / s.interval : 0;
     case 'heat':
       return (s.interval > 0 ? s.damage / s.interval : 0) + s.heatCoef * s.heatMax * s.heatMax;
     case 'chain':

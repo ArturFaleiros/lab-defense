@@ -267,7 +267,7 @@ function Live({ eng, u }: { eng: GameEngine; u: UnitInst }) {
   if (u.buff.dmg > 0.001) buffs.push(`Dano +${pct(u.buff.dmg)}`);
   if (u.buff.speed > 0.001) buffs.push(`Cadência +${pct(u.buff.speed)}`);
   if (u.buff.range > 0.001) buffs.push(`Alcance +${pct(u.buff.range)}`);
-  if (u.buff.powered) buffs.push('Alimentada: recarga 25% mais rápida');
+  if (u.buff.powered) buffs.push('Alimentada: recarga 10% mais rápida');
   if (u.buff.filtered) buffs.push('Filtrada pelo retificador: ruído pela metade');
   if (u.buff.timer > 0) buffs.push(`CI 555 em nível alto: cadência +${pct(u.buff.timer)}`);
   for (const sid of u.buff.syn) buffs.push(`${SYNERGY_BY_ID[sid].name}: ${SYNERGY_BY_ID[sid].effect}`);
