@@ -9,7 +9,8 @@ import { placeCost } from '../engine/stats';
 import { Renderer, type RenderUi } from '../render/renderer';
 import { session, useEngineVersion, useSession } from '../session';
 import type { EnemyId, TargetPriority, UnitId, Vec } from '../types';
-import { EnemyIcon, fmt, Modal, UnitIcon } from './common';
+import { CAPSULE_TABLE, PITY_LIMIT, pityRemaining } from '../progress/capsules';
+import { EnemyIcon, fmt, Meter, Modal, pct, UnitIcon } from './common';
 import { UnitPanel } from './UnitPanel';
 import { Button } from '../../components/ui';
 
@@ -141,9 +142,12 @@ function ModBar({ eng }: { eng: GameEngine }) {
   );
 }
 
-/** Abertura da Cápsula Energética (modo infinito). */
+/**
+ * Abertura da Cápsula de Energia (§15.4). Mostra a animação, a recompensa, o indicador da
+ * garantia (X/50) e a TABELA COMPLETA de probabilidades — as chances nunca ficam escondidas.
+ */
 function CapsuleOverlay() {
-  const { capsule } = useSession();
+  const { capsule, profile } = useSession();
   const [opened, setOpened] = useState(false);
   useEffect(() => {
     setOpened(false);
@@ -152,13 +156,21 @@ function CapsuleOverlay() {
     return () => window.clearTimeout(t);
   }, [capsule]);
   if (!capsule) return null;
-  const c = capsule.roll.content;
-  const secret = c?.kind === 'secret';
-  const sc = UNITS.supercondutor;
+  const c = capsule.content;
+  const secret = c.kind === 'secret';
+  const unit = capsule.secretUnit ? UNITS[capsule.secretUnit] : null;
+  const pity = capsule.pity;
+  const faltam = pityRemaining(pity);
+  const perto = faltam <= 10;
   return (
-    <div className={`gd-capsule${opened ? ' is-open' : ''}${secret ? ' is-secret' : ''}`} role="dialog" aria-modal="true" aria-label="Cápsula Energética">
+    <div
+      className={`gd-capsule${opened ? ' is-open' : ''}${secret ? ' is-secret' : ''}`}
+      role="dialog"
+      aria-modal="true"
+      aria-label="Cápsula de Energia"
+    >
       <div className="gd-capsule__card">
-        <div className="gd-kicker">Onda {capsule.roll.milestone} · Cápsula Energética</div>
+        <div className="gd-kicker">Onda {capsule.roll.milestone} · Cápsula de Energia</div>
         <div className="gd-capsule__orb" aria-hidden="true">
           <span />
           <i />
@@ -167,23 +179,62 @@ function CapsuleOverlay() {
         </div>
         {!opened ? (
           <p className="gd-capsule__msg">Concatenando energia…</p>
-        ) : secret && capsule.newSecret ? (
+        ) : secret && unit ? (
           <div className="gd-capsule__reward">
-            <span className="gd-rarity" style={{ color: RARITIES.secreto.color }}>
-              Unidade Secreta descoberta
+            <span className="gd-rarity" style={{ color: RARITIES[unit.rarity].color }}>
+              {capsule.guaranteed ? 'Garantia ativada — Unidade Secreta!' : 'Unidade Secreta descoberta'}
             </span>
-            <UnitIcon id="supercondutor" size={72} />
-            <strong>{sc.name}</strong>
-            <p>{sc.role}</p>
+            {capsule.secretUnit && <UnitIcon id={capsule.secretUnit} size={72} />}
+            <strong>{unit.name}</strong>
+            <span className="gd-muted">{RARITIES[unit.rarity].name}</span>
+            <p>{unit.role}</p>
+            <p className="gd-note">{unit.tech.definition}</p>
             <p className="gd-muted">Entra na sua coleção quando o servidor confirmar a partida (1 unidade Mítica ou Secreta por equipe).</p>
           </div>
         ) : (
           <div className="gd-capsule__reward">
-            {secret && <p className="gd-muted">Você já possui a unidade secreta: a cápsula foi convertida em energia.</p>}
-            <strong className="gd-capsule__ec">+{capsule.ec} EC</strong>
+            {c.kind === 'secretDuplicate' && <p className="gd-muted">Você já possui todas as unidades secretas: a cápsula foi convertida em energia.</p>}
+            {c.kind === 'xp' ? (
+              <>
+                <strong className="gd-capsule__ec">+{capsule.xp} XP</strong>
+                <p className="gd-muted">Experiência de Engenheiro: vai para a progressão permanente da conta.</p>
+              </>
+            ) : (
+              <strong className="gd-capsule__ec">+{capsule.ec} EC</strong>
+            )}
             <p className="gd-muted">Confirmada pelo servidor ao encerrar a partida.</p>
           </div>
         )}
+
+        {/* §15.4: indicador de garantia, com destaque quando está perto */}
+        <div className={`gd-pity${perto ? ' is-near' : ''}`}>
+          <div className="gd-pity__top">
+            <span>Garantia da unidade secreta</span>
+            <strong className="mono">
+              {pity}/{PITY_LIMIT}
+            </strong>
+          </div>
+          <Meter value={pity / PITY_LIMIT} tone={perto ? 'amber' : 'violet'} />
+          <span className="gd-pity__hint">
+            {faltam === 0 ? 'A próxima cápsula concede a unidade secreta.' : `Faltam ${faltam} cápsula(s) para a garantia.`}
+          </span>
+        </div>
+
+        {/* §15.4: tabela completa de chances, sempre visível */}
+        <table className="gd-odds">
+          <tbody>
+            {CAPSULE_TABLE.map((row) => (
+              <tr key={row.kind} className={c.kind === row.kind || (c.kind === 'secretDuplicate' && row.kind === 'secret') ? 'is-hit' : ''}>
+                <th className="mono">{pct(row.p)}</th>
+                <td>{row.label}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        <p className="gd-muted">
+          Cápsulas abertas nesta conta: {profile.capsules.opened} · secretas obtidas: {profile.capsules.secrets}
+        </p>
+
         <Button variant="primary" disabled={!opened} onClick={() => session.closeCapsule()}>
           Coletar e continuar
         </Button>

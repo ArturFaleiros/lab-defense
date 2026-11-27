@@ -8,8 +8,8 @@ import { GameEngine } from './engine/GameEngine';
 import { attachRecorder, matchRng, type LogEntry } from './engine/replay';
 import { buildConfig, endlessStage, isEndless } from './engine/setup';
 import { api, ApiError, type PlayerResponse } from './net/api';
-import { SECRET_DUPLICATE_EC, type CapsuleRoll } from './progress/capsules';
-import { defaultProfile, type MatchSummary, type Profile, type RewardReport } from './progress/profile';
+import { resolveCapsule, type CapsuleContent, type CapsuleRoll } from './progress/capsules';
+import { defaultProfile, ownedSecrets, type MatchSummary, type Profile, type RewardReport } from './progress/profile';
 import type { Difficulty, MapId, TraitId, UnitId } from './types';
 
 /**
@@ -74,8 +74,16 @@ export interface SessionState {
 
 export interface CapsuleView {
   roll: CapsuleRoll;
+  /** recompensa resolvida localmente (prévia; o servidor confirma ao encerrar) */
+  content: CapsuleContent;
   ec: number;
+  xp: number;
   newSecret: boolean;
+  secretUnit: UnitId | null;
+  /** veio da garantia dos 50 */
+  guaranteed: boolean;
+  /** contador de garantia depois desta cápsula */
+  pity: number;
   /** a partida estava pausada antes da cápsula? (para restaurar) */
   wasPaused: boolean;
 }
@@ -313,20 +321,47 @@ class GameSession extends Store<SessionState> {
     if (stage) void this.startMatch(stage.id, loadoutIds, difficulty);
   }
 
-  /** Cápsula do modo infinito: mostra a abertura; o servidor credita ao encerrar a partida. */
+  /**
+   * Cápsula do modo infinito (§15). A engine só entrega os números crus do sorteio; a
+   * recompensa é resolvida pela MESMA função pura que o servidor usa, aplicada ao perfil
+   * que o servidor mandou. É uma PRÉVIA: quem credita de verdade é o servidor, ao encerrar
+   * a partida. Por isso o contador de garantia local soma as cápsulas já abertas nesta
+   * partida — assim a prévia acompanha a sequência, inclusive quando a garantia estoura.
+   */
   private onCapsule(engine: GameEngine, roll: CapsuleRoll): void {
     if (this.snap.engine !== engine) return;
     if (!roll.got) {
       this.toast(`Onda ${roll.milestone}: nenhuma cápsula desta vez (50% de chance).`, 'info');
       return;
     }
-    const owned = this.snap.profile.units.includes('supercondutor');
-    const c = roll.content;
-    const newSecret = c?.kind === 'secret' && !owned;
-    const ec = c?.kind === 'secret' ? (owned ? SECRET_DUPLICATE_EC : 0) : (c?.amount ?? 0);
+    const p = this.snap.profile;
+    const abertasAntes = engine.stats.capsules.filter((c) => c.got && c.milestone < roll.milestone).length;
+    const owned = [...ownedSecrets(p)];
+    // reaplica as cápsulas anteriores desta partida para chegar ao contador correto
+    let pity = p.capsules.pity;
+    for (const anterior of engine.stats.capsules.filter((c) => c.got && c.milestone < roll.milestone)) {
+      const r = resolveCapsule(anterior, pity, owned);
+      pity = r.pityAfter;
+      if (r.content.kind === 'secret') owned.push(r.content.unit);
+    }
+    void abertasAntes;
+    const res = resolveCapsule(roll, pity, owned);
+    const c = res.content;
     const wasPaused = engine.paused;
     engine.setPaused(true);
-    this.set({ capsule: { roll, ec, newSecret, wasPaused } });
+    this.set({
+      capsule: {
+        roll,
+        content: c,
+        ec: c.kind === 'ec' || c.kind === 'ecPlus' || c.kind === 'secretDuplicate' ? c.amount : 0,
+        xp: c.kind === 'xp' ? c.amount : 0,
+        newSecret: c.kind === 'secret',
+        secretUnit: c.kind === 'secret' ? c.unit : null,
+        guaranteed: res.guaranteed,
+        pity: res.pityAfter,
+        wasPaused,
+      },
+    });
   }
 
   closeCapsule(): void {

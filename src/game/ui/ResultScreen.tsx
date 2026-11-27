@@ -8,6 +8,7 @@ import { TRAITS } from '../data/traits';
 import { UNITS } from '../data/units';
 import { rng } from '../engine/geometry';
 import { isEndless } from '../engine/setup';
+import { PITY_LIMIT } from '../progress/capsules';
 import { isStageUnlocked } from '../progress/profile';
 import { session, useSession } from '../session';
 import type { UnitId } from '../types';
@@ -234,20 +235,28 @@ export function ResultScreen() {
 
       {endless && report.capsules.length > 0 && (
         <section className="gd-card">
-          <h3 className="gd-h3">Cápsulas Energéticas</h3>
+          <h3 className="gd-h3">Cápsulas de Energia</h3>
           <ul className="gd-tips">
-            {report.capsules.map((c) => (
-              <li key={c.milestone}>
-                Onda {c.milestone}:{' '}
-                {!c.got
-                  ? 'sem cápsula (verificação de 50%)'
-                  : c.content?.kind === 'secret'
-                    ? 'Unidade Secreta!'
-                    : `+${c.content?.kind === 'ec' ? c.content.amount : 0} EC`}
-              </li>
-            ))}
+            {report.capsules.map((c) => {
+              const g = report.capsuleGrants?.find((x) => x.milestone === c.milestone);
+              let texto = 'sem cápsula (verificação de 50%)';
+              if (c.got && g) {
+                if (g.kind === 'secret') texto = `Unidade Secreta: ${g.label}${g.guaranteed ? ' (garantia dos 50)' : ''}`;
+                else if (g.kind === 'xp') texto = `+${g.amount} XP de Engenheiro`;
+                else texto = `+${g.amount} EC`;
+              } else if (c.got) {
+                texto = 'cápsula obtida (confirmada pelo servidor)';
+              }
+              return (
+                <li key={c.milestone}>
+                  Onda {c.milestone}: {texto}
+                </li>
+              );
+            })}
           </ul>
-          <p className="gd-note">As cápsulas são creditadas no momento em que são abertas; a recompensa acima já está no seu perfil.</p>
+          <p className="gd-note">
+            Garantia da unidade secreta: {profile.capsules.pity}/{PITY_LIMIT} · as recompensas acima foram calculadas e creditadas pelo servidor.
+          </p>
         </section>
       )}
 

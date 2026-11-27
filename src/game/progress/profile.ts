@@ -7,7 +7,7 @@ import { EXCLUSIVE_RARITIES, UNITS, UNIT_ORDER } from '../data/units';
 import type { MatchStats } from '../engine/GameEngine';
 import { isEndless } from '../engine/setup';
 import type { Difficulty, LoadoutEntry, MapId, Tier, TraitId, UnitId } from '../types';
-import { SECRET_DUPLICATE_EC, type CapsuleContent, type CapsuleRoll } from './capsules';
+import { PITY_LIMIT, resolveCapsule, SECRET_UNITS, type CapsuleContent, type CapsuleRoll } from './capsules';
 
 /**
  * Progresso permanente do jogador, salvo localmente (localStorage).
@@ -22,7 +22,6 @@ export const STORAGE_KEY = 'emlab.defense.v1';
 export const PROFILE_VERSION = 2;
 export const LOADOUT_SIZE = 5;
 const START_UNITS: UnitId[] = ['rele', 'bobina', 'fonte'];
-const SECRET_UNIT: UnitId = 'supercondutor';
 
 export interface DiffRecord {
   cleared: boolean;
@@ -78,6 +77,17 @@ export interface Profile {
     secrets: number;
     /** identificadores das cápsulas já creditadas (evita duplicidade) */
     log: string[];
+    /* ---------- 1.2 (§15) ---------- */
+    /**
+     * Contador da GARANTIA: cápsulas abertas desde a última unidade secreta. Vive no perfil,
+     * que é persistido por `player_id` no banco — nunca apenas no navegador. Sobrevive a
+     * recarregar a página, fechar o navegador e entrar de outro dispositivo.
+     */
+    pity: number;
+    /** XP de engenheiro recebida em cápsulas */
+    xp: number;
+    /** quantas unidades secretas vieram pela garantia */
+    guaranteed: number;
   };
   stats: {
     kills: number;
@@ -111,7 +121,7 @@ export function defaultProfile(): Profile {
     stages: {},
     achievements: {},
     secrets: {},
-    capsules: { checks: 0, opened: 0, ec: 0, secrets: 0, log: [] },
+    capsules: { checks: 0, opened: 0, ec: 0, secrets: 0, log: [], pity: 0, xp: 0, guaranteed: 0 },
     stats: {
       kills: 0,
       leaks: 0,
@@ -204,7 +214,11 @@ export function sanitize(raw: unknown): Profile {
       opened: num(c.opened),
       ec: num(c.ec),
       secrets: num(c.secrets),
-      log: Array.isArray(c.log) ? c.log.filter((x): x is string => typeof x === 'string').slice(-200) : [],
+      log: Array.isArray(c.log) ? c.log.filter((x): x is string => typeof x === 'string').slice(-400) : [],
+      // 1.2: o contador da garantia nunca pode passar do limite nem ficar negativo
+      pity: Math.max(0, Math.min(PITY_LIMIT, num(c.pity))),
+      xp: Math.max(0, num(c.xp)),
+      guaranteed: Math.max(0, num(c.guaranteed)),
     },
     stats: { ...base.stats, ...(typeof r.stats === 'object' ? r.stats : {}) },
     history: Array.isArray(r.history) ? r.history.slice(0, 20) : [],
@@ -334,8 +348,20 @@ export interface RewardReport {
   achievements: string[];
   endlessRecord: boolean;
   quizPending: boolean;
-  /** cápsulas sorteadas na partida (já creditadas durante a partida) */
+  /** cápsulas sorteadas na partida (sorteio cru registrado pela engine) */
   capsules: CapsuleRoll[];
+  /** 1.2: recompensa que o SERVIDOR concedeu em cada cápsula aberta (§15.3) */
+  capsuleGrants?: CapsuleGrantSummary[];
+}
+
+/** Resumo do que uma cápsula concedeu, para a tela de resultado. */
+export interface CapsuleGrantSummary {
+  milestone: number;
+  kind: CapsuleContent['kind'];
+  amount: number;
+  /** nome da unidade secreta, ou a faixa da recompensa */
+  label: string;
+  guaranteed: boolean;
 }
 
 const OBJECTIVE_EC = 25;
@@ -475,42 +501,108 @@ export interface CapsuleGrant {
   applied: boolean;
   /** EC efetivamente creditada */
   ec: number;
+  /** XP de engenheiro efetivamente creditada */
+  xp: number;
   /** a unidade secreta foi descoberta agora */
   newSecret: boolean;
+  /** qual unidade secreta foi concedida (null se nenhuma) */
+  secretUnit: UnitId | null;
+  /** a unidade veio da garantia dos 50 */
+  guaranteed: boolean;
+  /** recompensa resolvida (null se a cápsula não foi obtida) */
+  content: CapsuleContent | null;
+  /** contador de garantia depois desta abertura */
+  pity: number;
+  levelBefore: number;
+  levelAfter: number;
   achievements: string[];
 }
 
+/** Unidades secretas que o jogador já possui (base da resolução da cápsula). */
+export function ownedSecrets(p: Profile): UnitId[] {
+  return SECRET_UNITS.filter((u) => p.units.includes(u));
+}
+
 /**
- * Registra uma verificação de cápsula (idempotente pela chave `key`, única por partida e
- * marco). Cápsulas obtidas creditam EC ou desbloqueiam a unidade secreta na hora.
+ * Credita uma cápsula (§15.3).
+ *
+ * - IDEMPOTENTE pela chave `key` (única por partida e marco): reenviar a mesma abertura não
+ *   concede nada de novo, então nem uma atualização da interface nem um reenvio da partida
+ *   geram recompensa dupla.
+ * - A recompensa é RESOLVIDA AQUI, a partir dos números crus do sorteio e do estado da
+ *   conta (contador de garantia e inventário) — não do que o cliente disse.
+ * - Saldo, XP, inventário e contador são atualizados em um único objeto: ou a função
+ *   devolve o perfil com tudo aplicado, ou não altera nada (`applied: false`).
  */
 export function grantCapsule(prev: Profile, key: string, roll: CapsuleRoll): CapsuleGrant {
-  if (prev.capsules.log.includes(key)) return { profile: prev, applied: false, ec: 0, newSecret: false, achievements: [] };
+  const levelBefore = levelInfo(prev.xp).level;
+  const none = (applied: boolean): CapsuleGrant => ({
+    profile: prev,
+    applied,
+    ec: 0,
+    xp: 0,
+    newSecret: false,
+    secretUnit: null,
+    guaranteed: false,
+    content: null,
+    pity: prev.capsules.pity,
+    levelBefore,
+    levelAfter: levelBefore,
+    achievements: [],
+  });
+  if (prev.capsules.log.includes(key)) return none(false);
+
   const p: Profile = structuredClone(prev);
-  p.capsules.log = [...p.capsules.log, key].slice(-200);
+  p.capsules.log = [...p.capsules.log, key].slice(-400);
   p.capsules.checks++;
+
+  if (!roll.got) {
+    // cápsula não obtida: registra a verificação, sem mexer na garantia
+    const achievements = grantAchievements(p, null);
+    return { ...none(true), profile: p, achievements };
+  }
+
+  const res = resolveCapsule(roll, p.capsules.pity, ownedSecrets(p));
+  p.capsules.opened++;
+  p.capsules.pity = res.pityAfter;
+
   let ec = 0;
+  let xp = 0;
   let newSecret = false;
-  if (roll.got && roll.content) {
-    p.capsules.opened++;
-    const c: CapsuleContent = roll.content;
-    if (c.kind === 'secret') {
-      if (!p.units.includes(SECRET_UNIT)) {
-        p.units.push(SECRET_UNIT);
-        p.secrets[SECRET_UNIT] = Date.now();
-        p.capsules.secrets++;
-        newSecret = true;
-      } else {
-        ec = SECRET_DUPLICATE_EC;
-      }
-    } else {
-      ec = c.amount;
-    }
+  let secretUnit: UnitId | null = null;
+  const c = res.content;
+  if (c.kind === 'secret') {
+    secretUnit = c.unit;
+    newSecret = true;
+    p.units.push(c.unit);
+    p.secrets[c.unit] = Date.now();
+    p.capsules.secrets++;
+    if (res.guaranteed) p.capsules.guaranteed++;
+  } else if (c.kind === 'xp') {
+    xp = c.amount;
+    p.xp += xp;
+    p.capsules.xp += xp;
+  } else {
+    ec = c.amount;
     p.ec += ec;
     p.capsules.ec += ec;
   }
+
   const achievements = grantAchievements(p, null);
-  return { profile: p, applied: true, ec, newSecret, achievements };
+  return {
+    profile: p,
+    applied: true,
+    ec,
+    xp,
+    newSecret,
+    secretUnit,
+    guaranteed: res.guaranteed,
+    content: c,
+    pity: p.capsules.pity,
+    levelBefore,
+    levelAfter: levelInfo(p.xp).level,
+    achievements,
+  };
 }
 
 /** Desafio de conhecimento pós-fase. Recompensa apenas no primeiro acerto. */

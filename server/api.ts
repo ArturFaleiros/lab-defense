@@ -11,7 +11,7 @@ import { TRAITS } from '../src/game/data/traits';
 import { UNITS } from '../src/game/data/units';
 import { MAX_SIM_STEPS, matchRng, replayMatch, validateLog, type LogEntry } from '../src/game/engine/replay';
 import { buildConfig, endlessStage, isEndless } from '../src/game/engine/setup';
-import type { CapsuleRoll } from '../src/game/progress/capsules';
+import { CAPSULE_TABLE, type CapsuleRoll } from '../src/game/progress/capsules';
 import {
   answerQuiz,
   applyMatch,
@@ -26,6 +26,7 @@ import {
   sanitize,
   setLoadout,
   setTrait,
+  type CapsuleGrantSummary,
   type MatchSummary,
   type Profile,
   type RewardReport,
@@ -445,14 +446,40 @@ async function finishMatch(req: Request, ip: string | null, body: Record<string,
     if (again.rows[0]?.status !== 'open') throw new HttpError(409, 'match_closed', 'Esta partida já foi encerrada.');
     const { profile: start, rev } = await loadProfileFor(q, player.id, true);
     let profile = start;
-    const capsules: { roll: CapsuleRoll; ec: number; newSecret: boolean }[] = [];
+    const capsules: { roll: CapsuleRoll; ec: number; xp: number; newSecret: boolean; guaranteed: boolean; pity: number }[] = [];
+    const capsuleGrants: CapsuleGrantSummary[] = [];
     const achievements: string[] = [];
+    /*
+     * §15.3: a recompensa de cada cápsula é calculada AQUI, a partir dos números crus que a
+     * re-simulação produziu e do estado da conta (contador de garantia e inventário). A
+     * chave `matchId:milestone` torna a operação idempotente: reenviar a partida não concede
+     * nada de novo.
+     */
     for (const roll of engine.stats.capsules) {
       const g = grantCapsule(profile, `${matchId}:${roll.milestone}`, roll);
       if (!g.applied) continue;
       profile = g.profile;
-      capsules.push({ roll, ec: g.ec, newSecret: g.newSecret });
+      capsules.push({ roll, ec: g.ec, xp: g.xp, newSecret: g.newSecret, guaranteed: g.guaranteed, pity: g.pity });
       achievements.push(...g.achievements);
+      if (g.content) {
+        capsuleGrants.push({
+          milestone: roll.milestone,
+          kind: g.content.kind,
+          amount: g.content.kind === 'secret' ? 0 : g.content.amount,
+          label: g.content.kind === 'secret' ? UNITS[g.content.unit].name : CAPSULE_TABLE.find((r) => r.kind === g.content!.kind)?.label ?? '',
+          guaranteed: g.guaranteed,
+        });
+      }
+      await audit(q, 'capsule_granted', ip, player.id, {
+        matchId,
+        milestone: roll.milestone,
+        kind: g.content?.kind ?? null,
+        ec: g.ec,
+        xp: g.xp,
+        secret: g.secretUnit,
+        guaranteed: g.guaranteed,
+        pity: g.pity,
+      });
     }
     let report: RewardReport | null = null;
     let summary: MatchSummary | null = null;
@@ -460,7 +487,7 @@ async function finishMatch(req: Request, ip: string | null, body: Record<string,
       summary = { stageId: match.stage_id, won, waves, stats: engine.stats, difficulty: engine.config.difficulty ?? null };
       const r = applyMatch(profile, summary);
       profile = r.profile;
-      report = { ...r.report, achievements: [...achievements, ...r.report.achievements] };
+      report = { ...r.report, achievements: [...achievements, ...r.report.achievements], capsuleGrants };
     }
     await saveProfileFor(q, player.id, profile, rev);
     const result = { won, waves, kills: engine.stats.kills, leaks: engine.stats.leaks, xp: report?.xp ?? 0, ec: report?.ec ?? 0, capsules: capsules.length, mismatch };
